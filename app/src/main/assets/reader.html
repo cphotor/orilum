@@ -352,9 +352,7 @@ view.addEventListener('error', e => {
 // 三区点击（向左/右翻页前先关闭标题栏/工具栏）
 $('zone-l').addEventListener('click', () => { hideBars(); view.goLeft().then(() => {}) })
 $('zone-r').addEventListener('click', () => { hideBars(); view.goRight().then(() => {}) })
-$('zone-m').addEventListener('click', () => {
-  $('bars').classList.toggle('hidden')
-})
+$('zone-m').addEventListener('click', () => toggleBars())
 
 // 返回书架
 $('btn-back').addEventListener('click', e => {
@@ -436,7 +434,11 @@ const openTOC = () => {
 }
 
 const closeTOC = () => $('toc-wrap').classList.remove('show')
+// 工具栏显隐
+const showBars = () => $('bars').classList.remove('hidden')
 const hideBars = () => $('bars').classList.add('hidden')
+const toggleBars = () =>
+  $('bars').classList.contains('hidden') ? showBars() : hideBars()
 
 const setCurrentToc = href => {
   if (currentTocEl) currentTocEl.classList.remove('current')
@@ -449,6 +451,7 @@ $('tool-toc').addEventListener('click', e => {
   e.stopPropagation()
   openTOC()
 })
+
 document.querySelectorAll('#tools-row .tool:not(#tool-toc)').forEach(btn => {
   btn.addEventListener('click', e => {
     e.stopPropagation()
