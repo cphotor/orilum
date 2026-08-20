@@ -36,7 +36,7 @@
 
   /* 顶/底部工具栏 */
   #bars {
-    position: absolute;
+    position: fixed;
     inset: 0;
     z-index: 10;
     pointer-events: none;
@@ -46,7 +46,6 @@
   #bars .bar {
     position: absolute;
     left: 0; right: 0;
-    height: 56px;
     background: rgba(30, 30, 30, 0.92);
     color: #f5f5f5;
     display: flex;
@@ -54,8 +53,15 @@
     padding: 0 16px;
     box-sizing: border-box;
   }
-  #bar-top { top: 0; }
-  #bar-bottom { bottom: 0; justify-content: space-between; gap: 12px; }
+  #bar-top { top: 0; height: 56px; }
+  #bar-bottom {
+    bottom: 0;
+    height: auto;
+    padding: 0;
+    padding-bottom: var(--bottom-inset, 0px); /* 让底部内容避开系统手势/导航条 */
+    flex-direction: column;
+    gap: 0;
+  }
   #btn-back {
     /* #bars 是 pointer-events:none（让点击穿透到翻页区），按钮需单独放行命中 */
     pointer-events: auto;
@@ -69,11 +75,74 @@
     cursor: pointer;
   }
   #title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  #progress { font-size: 13px; opacity: 0.85; white-space: nowrap; }
+  #chapter-info {
+    flex-shrink: 0;
+    font-size: 12px;
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+  }
+  #chapter-title { opacity: 0.7; }
+
+  /* 底部：进度行 */
+  #progress-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 12px 2px;
+    box-sizing: border-box;
+  }
+  #progress-row button {
+    pointer-events: auto;
+    background: transparent;
+    color: inherit;
+    border: none;
+    font-size: 12px;
+    padding: 6px 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  #seek {
+    flex: 1;
+    height: 24px;
+    margin: 0;
+    accent-color: #c8a15a;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  #pct { font-size: 12px; opacity: 0.85; white-space: nowrap; flex-shrink: 0; }
+
+  /* 底部：工具行（图标+文字，将来可切简略模式只显示图标） */
+  #tools-row {
+    display: flex;
+    justify-content: space-around;
+    width: 100%;
+    padding: 2px 0 8px;
+    box-sizing: border-box;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .tool {
+    pointer-events: auto;
+    background: transparent;
+    color: inherit;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 10px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  .tool .ic { font-size: 20px; line-height: 1; }
   #status {
     position: absolute;
     left: 0; right: 0;
-    bottom: 64px;
+    bottom: 148px;
     z-index: 11;
     text-align: center;
     pointer-events: none;
@@ -83,6 +152,87 @@
     transition: opacity 0.3s;
   }
   #status.show { opacity: 1; }
+  #bar-top button { pointer-events: auto; }
+
+  /* ── 目录抽屉 ─────────────────────────── */
+  #toc-wrap {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+  }
+  #toc-wrap.show { display: block; }
+  #toc-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  #toc-panel {
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: min(360px, 85vw);
+    background: #faf8f4;
+    color: #2b2b2b;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+  }
+  #toc-wrap.show #toc-panel { transform: translateX(0); }
+  #toc-head {
+    height: 52px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #ece9e2;
+    font-size: 16px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  #btn-toc-close {
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    color: inherit;
+    padding: 8px;
+  }
+  #toc-list {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 0;
+  }
+  #toc-list ol { list-style: none; margin: 0; padding: 0; }
+  #toc-list li { position: relative; }
+  #toc-list li.collapsed > ol { display: none; }
+  #toc-list .toc-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    color: #333;
+    text-decoration: none;
+    font-size: 15px;
+    border-bottom: 1px solid #f0ede6;
+    cursor: pointer;
+  }
+  #toc-list .toc-item:active { background: #efece4; }
+  #toc-list .toc-item.current { color: #a06b1f; font-weight: 600; }
+  #toc-list .expander {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    margin-right: 2px;
+    background: transparent;
+    border: none;
+    color: #999;
+    font-size: 12px;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+  }
+  #toc-list li.collapsed > .toc-item .expander { transform: rotate(-90deg); }
 </style>
 </head>
 <body>
@@ -96,10 +246,31 @@
   <div id="bar-top" class="bar">
     <button id="btn-back" type="button">‹ 书架</button>
     <span id="title">—</span>
+    <span id="chapter-info">第 <span id="chapter">0</span> 章 <span id="chapter-title"></span></span>
   </div>
   <div id="bar-bottom" class="bar">
-    <span>第 <span id="chapter">0</span> 章</span>
-    <span id="progress">0%</span>
+    <div id="progress-row">
+      <button id="btn-prev" type="button">上一章</button>
+      <input id="seek" type="range" min="0" max="1000" value="0" step="1" />
+      <span id="pct">0%</span>
+      <button id="btn-next" type="button">下一章</button>
+    </div>
+    <div id="tools-row">
+      <button class="tool" id="tool-toc" type="button"><span class="ic">☰</span><span class="lb">目录</span></button>
+      <button class="tool" type="button"><span class="ic">☆</span><span class="lb">书签</span></button>
+      <button class="tool" type="button"><span class="ic">✎</span><span class="lb">笔记</span></button>
+      <button class="tool" type="button"><span class="ic">☾</span><span class="lb">夜间</span></button>
+      <button class="tool" type="button"><span class="ic">⚙</span><span class="lb">设置</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- 目录抽屉 -->
+<div id="toc-wrap">
+  <div id="toc-scrim"></div>
+  <div id="toc-panel">
+    <div id="toc-head"><span>目录</span><button id="btn-toc-close" type="button">✕</button></div>
+    <div id="toc-list"></div>
   </div>
 </div>
 <div id="status"></div>
@@ -132,14 +303,25 @@ const log = msg => {
 const view = $('view')
 view.setAttribute('flow', 'paginated')
 
+let seeking = false // 进度条是否在拖动中
+
+// 底部安全区（系统手势/导航条高度）：把底部工具栏抬到其上，避免低部被系统栏遮挡
+const bottomInset = (typeof EPUBBridge !== 'undefined' && EPUBBridge.getBottomInset)
+  ? EPUBBridge.getBottomInset() : 0
+if (bottomInset > 0) document.documentElement.style.setProperty('--bottom-inset', bottomInset + 'px')
+
 view.addEventListener('relocate', e => {
   const loc = view.lastLocation ?? e.detail ?? {}
   // lastLocation.section.current = 章节索引；fraction = 全书进度(0..1)
   const chapter = (loc.section?.current ?? 0) + 1
   $('chapter').textContent = String(chapter)
+  $('chapter-title').textContent = loc.tocItem?.label ?? ''
   const pct = Math.round((loc.fraction ?? 0) * 100)
-  $('progress').textContent = `${pct}%`
-  log(`relocate chapter=${chapter} fraction=${(loc.fraction ?? 0).toFixed(4)}`)
+  $('pct').textContent = `${pct}%`
+  // 非拖动进度条时，同步进度条位置
+  if (!seeking) $('seek').value = Math.round((loc.fraction ?? 0) * 1000)
+  setCurrentToc(loc.tocItem?.href)
+  log(`relocate chapter=${chapter} fraction=${(loc.fraction ?? 0).toFixed(4)} toc=${loc.tocItem?.label ?? ''}`)
   // 上报完整定位（含 cfi）给 Kotlin 落库，用于重开恢复
   if (typeof EPUBBridge !== 'undefined' && EPUBBridge.onLocation) {
     EPUBBridge.onLocation(JSON.stringify(loc))
@@ -159,7 +341,9 @@ view.addEventListener('error', e => {
 // 三区点击
 $('zone-l').addEventListener('click', () => view.goLeft().then(() => {}))
 $('zone-r').addEventListener('click', () => view.goRight().then(() => {}))
-$('zone-m').addEventListener('click', () => $('bars').classList.toggle('hidden'))
+$('zone-m').addEventListener('click', () => {
+  $('bars').classList.toggle('hidden')
+})
 
 // 返回书架
 $('btn-back').addEventListener('click', e => {
@@ -167,6 +351,133 @@ $('btn-back').addEventListener('click', e => {
   if (typeof EPUBBridge !== 'undefined' && EPUBBridge.back) EPUBBridge.back()
   else history.back()
 })
+
+// ── 目录导航 ────────────────────────────
+const tocMap = new Map() // href -> 对应 toc-item 元素
+let currentTocEl = null
+
+// 递归构建目录树（book.toc 结构：{ label, href, subitems }）
+const buildTOC = (items, parent) => {
+  const ol = document.createElement('ol')
+  parent.append(ol)
+  for (const item of items) {
+    if (!item?.label) continue
+    const li = document.createElement('li')
+    const a = document.createElement(item.href ? 'a' : 'span')
+    a.className = 'toc-item'
+    a.textContent = item.label
+    if (item.subitems?.length) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'expander'
+      btn.textContent = '▾'
+      btn.setAttribute('aria-label', '展开/收起')
+      btn.addEventListener('click', e => {
+        e.stopPropagation()
+        li.classList.toggle('collapsed')
+      })
+      a.prepend(btn)
+      li.append(a)
+      buildTOC(item.subitems, li)
+    } else {
+      li.append(a)
+    }
+    if (item.href) {
+      tocMap.set(item.href, a)
+      a.addEventListener('click', e => {
+        e.preventDefault()
+        closeTOC()
+        view.goTo(item.href).catch(err => {
+          log('toc goTo err: ' + err)
+          toast('跳转失败')
+        })
+      })
+    }
+    ol.append(li)
+  }
+}
+
+const openTOC = () => {
+  $('toc-wrap').classList.add('show')
+  // 首次打开时构建目录；默认全部展开，便于定位当前章
+  if (!$('toc-list').firstElementChild && view.book?.toc) {
+    tocMap.clear()
+    buildTOC(view.book.toc, $('toc-list'))
+  }
+  if (!$('toc-list').firstElementChild) {
+    const p = document.createElement('p')
+    p.textContent = '（本书无目录）'
+    p.style.cssText = 'color:#999;text-align:center;padding:24px 0;'
+    $('toc-list').append(p)
+  }
+  $('toc-list').querySelectorAll('li.collapsed').forEach(li => li.classList.remove('collapsed'))
+  setCurrentToc(view.lastLocation?.tocItem?.href)
+  if (currentTocEl) currentTocEl.scrollIntoView({ block: 'center' })
+}
+
+const closeTOC = () => $('toc-wrap').classList.remove('show')
+
+const setCurrentToc = href => {
+  if (currentTocEl) currentTocEl.classList.remove('current')
+  currentTocEl = href ? tocMap.get(href) : null
+  if (currentTocEl) currentTocEl.classList.add('current')
+}
+
+// 底部工具行：目录（已实现），其余占位提示
+$('tool-toc').addEventListener('click', e => {
+  e.stopPropagation()
+  openTOC()
+})
+document.querySelectorAll('#tools-row .tool:not(#tool-toc)').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation()
+    toast('「' + (btn.querySelector('.lb')?.textContent ?? '') + '」功能开发中')
+  })
+})
+$('btn-toc-close').addEventListener('click', closeTOC)
+$('toc-scrim').addEventListener('click', closeTOC)
+
+// ── 上一章 / 下一章（按目录项跳转）──────────────
+// 展平目录为有序 href 数组，用于章节级跳转；退化为章节 index ±1
+const flattenTocHrefs = (items, out = []) => {
+  for (const it of items ?? []) {
+    if (it?.href) out.push(it.href)
+    if (it?.subitems?.length) flattenTocHrefs(it.subitems, out)
+  }
+  return out
+}
+const gotoChapter = async delta => {
+  const hrefs = view.book?.toc ? flattenTocHrefs(view.book.toc) : []
+  const cur = view.lastLocation?.tocItem?.href
+  const idx = cur ? hrefs.indexOf(cur) : -1
+  let target
+  if (idx >= 0) target = hrefs[idx + delta]
+  else target = delta > 0 ? hrefs[0] : hrefs[hrefs.length - 1] // 无目录项时回到书首/书末
+  if (target) return view.goTo(target)
+  // 无匹配目录项，退回按章节索引翻一章节
+  const index = (view.lastLocation?.section?.current ?? 0) + delta
+  return view.goTo(index)
+}
+$('btn-prev').addEventListener('click', e => {
+  e.stopPropagation()
+  gotoChapter(-1).catch(err => log('prev err: ' + err))
+})
+$('btn-next').addEventListener('click', e => {
+  e.stopPropagation()
+  gotoChapter(1).catch(err => log('next err: ' + err))
+})
+
+// ── 进度条拖动 seek ────────────────────────────────────
+const seekEl = $('seek')
+seekEl.addEventListener('pointerdown', () => { seeking = true }, { passive: true })
+const commitSeek = () => {
+  if (!seeking) return
+  seeking = false
+  view.goToFraction(seekEl.value / 1000).catch(err => log('seek err: ' + err))
+}
+seekEl.addEventListener('pointerup', commitSeek)
+seekEl.addEventListener('pointercancel', () => { seeking = false })
+seekEl.addEventListener('change', commitSeek)
 
 // ── 滑动翻页（默认动画）───────────────────────────
 // 走 foliate 原生分栏滚动：拖动时 renderer.scrollBy(dx,0) 会真切露出相邻列，
@@ -177,6 +488,8 @@ const SWIPE_LIMIT = 48 // 触发翻页的最小水平位移(px)
 let touch = { startX: 0, startY: 0, time: 0, dx: 0, lastX: 0, lastY: 0, vx: 0, vy: 0, active: false }
 
 addEventListener('touchstart', e => {
+  // 工具栏/占用区域内的触摸不参与滑动翻页（进度条拖动、按钮点击等）
+  if (e.target.closest?.('#bars')) return
   if (e.touches.length !== 1) return
   const t = e.touches[0]
   touch = {

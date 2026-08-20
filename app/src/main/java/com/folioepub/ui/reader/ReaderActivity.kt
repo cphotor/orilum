@@ -2,6 +2,7 @@ package com.folioepub.ui.reader
 
 import android.annotation.SuppressLint
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -162,6 +163,8 @@ class ReaderActivity : ComponentActivity() {
             settings.javaScriptCanOpenWindowsAutomatically = false
             settings.mediaPlaybackRequiresUserGesture = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // 阅读器 html/资源打包进 assets，必须禁用 WebView 缓存，否则旧版资源被缓存导致改动不生效
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
 
             webViewClient = object : WebViewClient() {
                 // 新版重载（现代 WebView 优先调用）
@@ -219,10 +222,20 @@ class ReaderActivity : ComponentActivity() {
         )
 
         webView.addJavascriptInterface(
-            EPUBBridge(bridge, { savedLocator }) { finish() },
+            EPUBBridge(bridge, { savedLocator }, { finish() }, bottomInset()),
             "EPUBBridge",
         )
         webView.loadUrl(ASSET_BASE + "assets/reader.html")
+    }
+
+    /** 底部安全区高度(px)。沉浸模式下取系统实际 inset（一般为 0 或手势条高），
+     * 避免把整条平台导航栏高度误加到底部导致留白过大。 */
+    private fun bottomInset(): Int {
+        return window.decorView.rootWindowInsets?.let { insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+            else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+        } ?: 0
     }
 
     override fun onBackPressed() {
@@ -236,6 +249,7 @@ class EPUBBridge(
     private val cb: LocatorCallback,
     private val savedLocatorProvider: () -> String?,
     private val exit: () -> Unit,
+    private val bottomInset: Int,
 ) {
 
     /** foliate 每次 relocate 回调：携带 `JSON.stringify(view.lastLocation)`。 */
@@ -245,6 +259,10 @@ class EPUBBridge(
     /** 返回上次保存的定位 JSON（无则 null），供 init({ lastLocation }) 恢复章节/页。 */
     @JavascriptInterface
     fun getSavedLocator(): String? = savedLocatorProvider()
+
+    /** 底部导航区/手势条高度(px)，用于把底部工具栏抬到系统导航之上，避免被遮挡。 */
+    @JavascriptInterface
+    fun getBottomInset(): Int = bottomInset
 
     /** 顶部「返回书架」：正常退出阅读器（不触发任何翻页）。 */
     @JavascriptInterface
