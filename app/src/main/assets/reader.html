@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>FolioEpub 阅读</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #f4f2ec;
+    font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: pan-y;
+  }
+  #view {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  /* 三区点击：左=上一页，右=下一页，中=切换工具栏 */
+  .zone {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 33.33%;
+    z-index: 5;
+  }
+  #zone-l { left: 0; }
+  #zone-m { left: 33.33%; }
+  #zone-r { right: 0; }
+
+  /* 顶/底部工具栏 */
+  #bars {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+  #bars.hidden { opacity: 0; }
+  #bars .bar {
+    position: absolute;
+    left: 0; right: 0;
+    height: 56px;
+    background: rgba(30, 30, 30, 0.92);
+    color: #f5f5f5;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    box-sizing: border-box;
+  }
+  #bar-top { top: 0; }
+  #bar-bottom { bottom: 0; justify-content: space-between; gap: 12px; }
+  #title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #progress { font-size: 13px; opacity: 0.85; white-space: nowrap; }
+  #status {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: 64px;
+    z-index: 11;
+    text-align: center;
+    pointer-events: none;
+    color: #8a8a8a;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #status.show { opacity: 1; }
+</style>
+</head>
+<body>
+<foliate-view id="view"></foliate-view>
+
+<div id="zone-l" class="zone"></div>
+<div id="zone-m" class="zone"></div>
+<div id="zone-r" class="zone"></div>
+
+<div id="bars" class="hidden">
+  <div id="bar-top" class="bar"><span id="title">—</span></div>
+  <div id="bar-bottom" class="bar">
+    <span>第 <span id="chapter">0</span> 章</span>
+    <span id="progress">0%</span>
+  </div>
+</div>
+<div id="status"></div>
+
+<script type="module">
+import './foliate-js/view.js'
+
+const $ = id => document.getElementById(id)
+const toast = msg => {
+  const el = $('status')
+  el.textContent = msg
+  el.classList.add('show')
+  clearTimeout(toast._t)
+  toast._t = setTimeout(() => el.classList.remove('show'), 1200)
+}
+
+/** Android -> JS：由 Kotlin 通过 evaluateJavascript 调用。 */
+window.folioWebView = {
+  next: () => view.goRight().then(() => log('next')),
+  prev: () => view.goLeft().then(() => log('prev')),
+  getLocation: () => JSON.stringify(view.lastLocation ?? {}),
+}
+
+const log = msg => {
+  console.log('[folio]', msg)
+  // JSBridge 上报日志（Kotlin 注入 EPUBBridge 时可看到）
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.log) EPUBBridge.log(msg)
+}
+
+const view = $('view')
+view.setAttribute('flow', 'paginated')
+
+view.addEventListener('relocate', e => {
+  const { index, fraction } = e.detail
+  $('chapter').textContent = String(index + 1)
+  const pct = Math.round((fraction ?? 0) * 100)
+  $('progress').textContent = `${pct}%`
+  log(`relocate index=${index} fraction=${fraction?.toFixed(4)}`)
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.onRelocate) {
+    EPUBBridge.onRelocate(index, Math.round((fraction ?? 0) * 100000) / 100000)
+  }
+})
+
+view.addEventListener('load', e => {
+  $('title').textContent = view.book?.metadata?.title || '未知书名'
+  log(`onLoad index=${e.detail.index}`)
+})
+
+view.addEventListener('error', e => {
+  log('view error: ' + (e.detail ?? e.message ?? e))
+  toast('渲染出错')
+})
+
+// 三区点击
+$('zone-l').addEventListener('click', () => view.goLeft().then(() => {}))
+$('zone-r').addEventListener('click', () => view.goRight().then(() => {}))
+$('zone-m').addEventListener('click', () => $('bars').classList.toggle('hidden'))
+
+// 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
+async function loadBook(path) {
+  const res = await fetch(path)
+  if (!res.ok) throw new Error(`fetch ${path} -> ${res.status}`)
+  const blob = await res.blob()
+  const file = new File([blob], path.split('/').pop(), { type: 'application/epub+zip' })
+  await view.open(file)
+  await view.init({ showTextStart: true })
+}
+
+loadBook('/book/current.epub')
+  .then(() => log('book opened'))
+  .catch(err => {
+    console.error(err)
+    // 主动上报给 Kotlin（此设备 WebView 不回调 onConsoleMessage）
+    if (typeof EPUBBridge !== 'undefined' && EPUBBridge.log) {
+      EPUBBridge.log('open failed: ' + (err && (err.message || err.stack) || err))
+    }
+    toast('打开失败: ' + (err && err.message || err))
+  })
+</script>
+</body>
+</html>
