@@ -244,6 +244,117 @@
     transition: transform 0.2s ease;
   }
   #toc-list li.collapsed > .toc-item .expander { transform: translateY(-50%) rotate(-90deg); }
+
+  /* ── 设置抽屉（右侧滑出，多级下钻页面栈）──────────── */
+  #settings-wrap {
+    position: fixed;
+    inset: 0;
+    z-index: 22;
+    display: none;
+  }
+  #settings-wrap.show { display: block; }
+  #settings-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  #settings-panel {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: min(360px, 85vw);
+    background: #faf8f4;
+    color: #2b2b2b;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.2);
+    transform: translateX(100%);
+    transition: transform 0.28s ease;
+  }
+  #settings-wrap.show #settings-panel { transform: translateX(0); }
+  #settings-head {
+    height: 52px;
+    padding: 0 8px 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #ece9e2;
+    font-size: 16px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  #settings-head button {
+    background: transparent;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    color: inherit;
+    padding: 10px;
+    line-height: 1;
+  }
+  #settings-title { flex: 1; text-align: center; }
+  #settings-pages {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+  /* 页面栈页：默认隐藏，当前页可滚动 */
+  .settings-page {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    display: none;
+  }
+  .settings-page.active { display: block; }
+  /* 分组标题 + 条目 */
+  .set-group-title {
+    padding: 14px 16px 6px;
+    font-size: 12px;
+    color: #999;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    min-height: 48px;
+    border-bottom: 1px solid #f0ede6;
+    font-size: 15px;
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  .set-row:active { background: #efece4; }
+  .set-row .set-label { flex: 1; }
+  .set-row .set-value { color: #888; font-size: 13px; margin-right: 4px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .set-row .set-chevron { color: #bbb; font-size: 14px; }
+  /* 开关 */
+  .switch {
+    position: relative;
+    width: 42px; height: 24px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute;
+    inset: 0;
+    background: #c9c4ba;
+    border-radius: 12px;
+    transition: background 0.2s;
+  }
+  .switch .thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 20px; height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: transform 0.2s;
+  }
+  .switch input:checked + .track { background: #c8a15a; }
+  .switch input:checked + .track .thumb { transform: translateX(18px); }
 </style>
 </head>
 <body>
@@ -271,7 +382,7 @@
       <button class="tool" type="button"><span class="ic">☆</span><span class="lb">书签</span></button>
       <button class="tool" type="button"><span class="ic">✎</span><span class="lb">笔记</span></button>
       <button class="tool" type="button"><span class="ic">☾</span><span class="lb">夜间</span></button>
-      <button class="tool" type="button"><span class="ic">⚙</span><span class="lb">设置</span></button>
+      <button class="tool" id="tool-settings" type="button"><span class="ic">⚙</span><span class="lb">设置</span></button>
     </div>
   </div>
 </div>
@@ -285,6 +396,21 @@
   </div>
 </div>
 <div id="status"></div>
+
+<!-- 设置抽屉：右侧滑出，多级下钻页面栈。
+     所有设置项（M2 排版/字体 + 阅读模式开关等）的载体。
+     暂全局生效；全局/按书作用域区分待定(TODO)。 -->
+<div id="settings-wrap">
+  <div id="settings-scrim"></div>
+  <div id="settings-panel">
+    <div id="settings-head">
+      <button id="btn-settings-back" type="button" style="visibility:hidden">‹</button>
+      <span id="settings-title">设置</span>
+      <button id="btn-settings-close" type="button">✕</button>
+    </div>
+    <div id="settings-pages"></div>
+  </div>
+</div>
 
 <script type="module">
 import './foliate-js/view.js'
@@ -446,13 +572,17 @@ const setCurrentToc = href => {
   if (currentTocEl) currentTocEl.classList.add('current')
 }
 
-// 底部工具行：目录（已实现），其余占位提示
+// 底部工具行：目录 / 设置（已实现），其余占位提示
 $('tool-toc').addEventListener('click', e => {
   e.stopPropagation()
   openTOC()
 })
+$('tool-settings').addEventListener('click', e => {
+  e.stopPropagation()
+  openSettings()
+})
 
-document.querySelectorAll('#tools-row .tool:not(#tool-toc)').forEach(btn => {
+document.querySelectorAll('#tools-row .tool:not(#tool-toc):not(#tool-settings)').forEach(btn => {
   btn.addEventListener('click', e => {
     e.stopPropagation()
     toast('「' + (btn.querySelector('.lb')?.textContent ?? '') + '」功能开发中')
@@ -460,6 +590,111 @@ document.querySelectorAll('#tools-row .tool:not(#tool-toc)').forEach(btn => {
 })
 $('btn-toc-close').addEventListener('click', closeTOC)
 $('toc-scrim').addEventListener('click', closeTOC)
+
+// ── 设置抽屉：多级下钻页面栈 ──────────────────
+// 页面栈：pages 为元素数组，栈顶即当前页。push 切入、pop 回退。
+const settingsPages = []
+const settingsTitleEl = $('settings-title')
+const settingsBackBtn = $('btn-settings-back')
+const settingsPageHost = $('settings-pages')
+
+const pushSettingsPage = (el, title) => {
+  settingsPages.forEach(p => p.classList.remove('active'))
+  el.classList.add('active')
+  settingsPages.push(el)
+  settingsTitleEl.textContent = title
+  settingsBackBtn.style.visibility = settingsPages.length > 1 ? 'visible' : 'hidden'
+}
+const popSettingsPage = () => {
+  if (settingsPages.length <= 1) return closeSettings()
+  settingsPages.pop().classList.remove('active')
+  const cur = settingsPages[settingsPages.length - 1]
+  cur.classList.add('active')
+  settingsTitleEl.textContent = cur.dataset.title ?? '设置'
+  settingsBackBtn.style.visibility = settingsPages.length > 1 ? 'visible' : 'hidden'
+}
+
+// 建一页通用容器：title 存 page 标题，内容通过 build 回调填充
+const settingsPage = (title, build) => {
+  const el = document.createElement('div')
+  el.className = 'settings-page'
+  el.dataset.title = title
+  build(el)
+  settingsPageHost.append(el)
+  return el
+}
+const settingsRow = (label, { value, onTap } = {}) => {
+  const div = document.createElement('div')
+  div.className = 'set-row'
+  div.innerHTML = `<span class="set-label">${label}</span>`
+  if (value !== undefined) {
+    div.insertAdjacentHTML('beforeend', `<span class="set-value">${value}</span>`)
+    div.insertAdjacentHTML('beforeend', '<span class="set-chevron">›</span>')
+  }
+  if (onTap) div.addEventListener('click', onTap)
+  return div
+}
+const settingsSwitch = (label, id, onChange) => {
+  const div = document.createElement('div')
+  div.className = 'set-row'
+  div.innerHTML = `<span class="set-label">${label}</span>
+    <label class="switch"><input id="${id}" type="checkbox"><span class="track"><span class="thumb"></span></span></label>`
+  if (onChange) div.querySelector('input').addEventListener('change', e => onChange(e.target.checked))
+  return div
+}
+
+// ── M2 下钻二级页骨架（具体控件待 M2 数据层接入，先建导航壳）──
+// 字号下钻页（保留，供 M2 接真实控件）
+const fontSizePage = settingsPage('字号', el => {
+  el.append(settingsRow('字号大小', { value: '15px', onTap: () => toast('字号设置(M2)开发中') }))
+})
+// 字体五分类下钻页（M2）
+const fontFacePage = settingsPage('字体', el => {
+  el.append(settingsRow('正文/标题/代码/粗体/斜体', { value: '', onTap: () => toast('字体五分类(M2)开发中') }))
+})
+// 行距下钻页（M2）
+const lineSpacingPage = settingsPage('行距', el => {
+  el.append(settingsRow('行距', { value: '1.6', onTap: () => toast('行距设置(M2)开发中') }))
+})
+// 主题下钻页（M2）
+const themePage = settingsPage('主题', el => {
+  el.append(settingsRow('阅读背景', { value: '羊皮纸', onTap: () => toast('主题设置(M2)开发中') }))
+})
+
+// 顶层：所有设置项平铺，从上到下排列；可下钻项带 ›，开关项直接切换
+const settingsTopPage = settingsPage('设置', el => {
+  el.append(settingsRow('字号', { value: '15px', onTap: () => pushSettingsPage(fontSizePage, '字号') }))
+  el.append(settingsRow('行距', { value: '1.6', onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
+  el.append(settingsRow('页边距', { value: '常规', onTap: () => toast('边距设置(M2)开发中') }))
+  el.append(settingsRow('字体(正/题/码/粗/斜)', { value: '', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
+  el.append(settingsRow('阅读背景', { value: '羊皮纸', onTap: () => pushSettingsPage(themePage, '主题') }))
+  el.append(settingsSwitch('翻页动画', 'set-page-anim',
+    v => { log(`set page-anim=${v}`)
+      if (v) view.renderer?.setAttribute?.('animated', '')
+      else view.renderer?.removeAttribute?.('animated') }
+  ))
+  el.append(settingsSwitch('打开时自动续读', 'set-auto-continue',
+    v => log(`set auto-continue=${v}`) // 与阅读进度存读恢复耦合，见 TODO(settings)
+  ))
+  el.append(settingsSwitch('显示页码', 'set-page-num',
+    v => log(`set page-num=${v}`) // 页码显示依赖分页计数方案，见 PROJECT_STATUS TODO
+  ))
+})
+
+// 打开/关闭设置抽屉（与目录抽屉互斥）
+const openSettings = () => {
+  hideBars()
+  closeTOC()
+  if (!settingsPages.length) pushSettingsPage(settingsTopPage, '设置')
+  $('settings-wrap').classList.add('show')
+}
+const closeSettings = () => {
+  while (settingsPages.length > 1) settingsPages.pop().classList.remove('active')
+  $('settings-wrap').classList.remove('show')
+}
+$('btn-settings-close').addEventListener('click', closeSettings)
+$('settings-scrim').addEventListener('click', closeSettings)
+$('btn-settings-back').addEventListener('click', popSettingsPage)
 
 // ── 上一章 / 下一章（按目录项跳转）──────────────
 // 展平目录为有序 href 数组，用于章节级跳转；退化为章节 index ±1
@@ -515,7 +750,7 @@ addEventListener('touchstart', e => {
   // 工具栏/目录抽屉区域内的触摸不参与滑动翻页（进度条拖动、目录点击等）。
   // 必须排除 #toc-wrap，否则在目录内点击小标题时 touchend 会触发 renderer.snap()，
   // 与 goTo(小标题) 的 scrollToAnchor 并发竞争滚轮位置，导致“同章小标题不跳转/偶尔不准”。
-  if (e.target.closest?.('#bars') || e.target.closest?.('#toc-wrap')) return
+  if (e.target.closest?.('#bars') || e.target.closest?.('#toc-wrap') || e.target.closest?.('#settings-wrap')) return
   if (e.touches.length !== 1) return
   const t = e.touches[0]
   touch = {
