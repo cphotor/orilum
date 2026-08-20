@@ -26,15 +26,20 @@
   - 三区左右翻页、章节切换 ✅
   - 加长第一章后能拆成多屏逐页推进 ✅（解决了「章节太短看不出超一屏分页」）
 
-### 进行中
-- M0 · 竖起自定义书架「选书 → 解析 → 渲染」新闭环（接入 SAF 选书、自建解析器、渲染）。
+### 进行中（M0-loop 已闭环，接近 M0 完成）
+- **M0-loop · 书架闭环 ✅**：SAF 选书 → 自建 `EpubParser` 解析 → 交 foliate-js 渲染。
   - **SAF 选书 → 私有化落盘 ✅**：`BookImporter` 导入时把 epub 拷贝进 `filesDir/books/`，`Book.filePath` 存本地副本路径（Room v1→v2 迁移 `sourceUri`→`filePath`，清理失效旧行）。书一经导入即应用持有，彻底脱离 SAF content:// 授权生命周期（真机验证重启后仍可读）。
   - **`WebViewAssetLoader` 请求拦截修正 ✅**：`/book/` handler 收到的 `path` 无前导斜杠（`current.epub`），修正判断后书籍字节成功送达 foliate-js，「空白屏幕」根治。assets 静态资源经 https 虚拟域正常加载。
 - **内置文件日志模块 ✅**：`FileLogger` 落盘 `filesDir/logs/`，仅 DEBUG 构建启用，按天分文件、超 1MB 轮转、单条 ≤4KB；覆盖 WebView 请求拦截/错误、foliate-js `EPUBBridge.log`、console。绕开 vivo/OPPO 平板不可关闭的系统 logcat 限流（`run-as` 可读）。
+- **M1 · 进度存读恢复 ✅**：reading_states 新增 `locator` 列（foliate `lastLocation` JSON，DB v2→v3 迁移）。每次 relocate 由 JS `EPUBBridge.onLocation` 上报整份 locator 落库（`chapter`=section.current、`progress`=全书 fraction 供轻量展示）；重开时 ReaderActivity 同步预载 locator，经 `EPUBBridge.getSavedLocator` 回传 `init({ lastLocation })` 精确定位。真机验证 `settled fraction == saved fraction`（如 0.0332=0.0332）精确恢复。
+  - **退出路径修复 ✅**：原「恢复前进一页」根因是无返回按钮、系统手势返回被吞成翻页污染了保存值。新增顶部「‹ 书架」按钮（`EPUBBridge.back() → finish()`），`#btn-back` 单独 `pointer-events:auto`（`#bars` 为穿透）；系统返回键统一为 `finish()` 退出，翻页只走三区点击。
+- **M1 · 章号显示修复 ✅**：relocate 改用 `lastLocation.section.current`（此前取 `e.detail.index` 为 undefined）。
 
-### 待办（M0 收尾 / M1）
-- M0-loop：书架闭环（SAF 选书 → 自建 `EpubParser` 解析 → 交 foliate-js 渲染）。
-- M1：一屏一页左右翻页、原生 pager、进度存读恢复（relocate 落 Room）、目录导航、scrolled 模式。
+### 待办（M1 进行）
+- 一屏一页翻页：左右点击已可用（M0），待接入原生 ViewPager 手势/滑动。
+- 目录导航（TOC 面板）。
+- scrolled（滚动）模式切换。
+- 进度在书架列表的展示（续读百分比）。
 
 ---
 

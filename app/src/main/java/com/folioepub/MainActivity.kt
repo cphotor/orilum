@@ -33,6 +33,7 @@ import com.folioepub.data.book.AppDatabase
 import com.folioepub.data.book.Book
 import com.folioepub.data.book.BookImporter
 import com.folioepub.data.book.BookRepository
+import com.folioepub.ui.reader.EXTRA_BOOK_ID
 import com.folioepub.ui.reader.EXTRA_BOOK_PATH
 import com.folioepub.ui.reader.ReaderActivity
 import com.folioepub.ui.theme.FolioEpubTheme
@@ -114,7 +115,8 @@ class MainActivity : ComponentActivity() {
     private fun openReader(book: Book) {
         startActivity(
             Intent(this, ReaderActivity::class.java)
-                .putExtra(EXTRA_BOOK_PATH, book.filePath),
+                .putExtra(EXTRA_BOOK_PATH, book.filePath)
+                .putExtra(EXTRA_BOOK_ID, book.id),
         )
     }
 

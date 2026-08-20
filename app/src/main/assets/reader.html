@@ -56,7 +56,19 @@
   }
   #bar-top { top: 0; }
   #bar-bottom { bottom: 0; justify-content: space-between; gap: 12px; }
-  #title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #btn-back {
+    /* #bars 是 pointer-events:none（让点击穿透到翻页区），按钮需单独放行命中 */
+    pointer-events: auto;
+    background: transparent;
+    color: inherit;
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 6px;
+    font-size: 14px;
+    padding: 4px 10px;
+    margin-right: 10px;
+    cursor: pointer;
+  }
+  #title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
   #progress { font-size: 13px; opacity: 0.85; white-space: nowrap; }
   #status {
     position: absolute;
@@ -81,7 +93,10 @@
 <div id="zone-r" class="zone"></div>
 
 <div id="bars" class="hidden">
-  <div id="bar-top" class="bar"><span id="title">—</span></div>
+  <div id="bar-top" class="bar">
+    <button id="btn-back" type="button">‹ 书架</button>
+    <span id="title">—</span>
+  </div>
   <div id="bar-bottom" class="bar">
     <span>第 <span id="chapter">0</span> 章</span>
     <span id="progress">0%</span>
@@ -118,13 +133,16 @@ const view = $('view')
 view.setAttribute('flow', 'paginated')
 
 view.addEventListener('relocate', e => {
-  const { index, fraction } = e.detail
-  $('chapter').textContent = String(index + 1)
-  const pct = Math.round((fraction ?? 0) * 100)
+  const loc = view.lastLocation ?? e.detail ?? {}
+  // lastLocation.section.current = 章节索引；fraction = 全书进度(0..1)
+  const chapter = (loc.section?.current ?? 0) + 1
+  $('chapter').textContent = String(chapter)
+  const pct = Math.round((loc.fraction ?? 0) * 100)
   $('progress').textContent = `${pct}%`
-  log(`relocate index=${index} fraction=${fraction?.toFixed(4)}`)
-  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.onRelocate) {
-    EPUBBridge.onRelocate(index, Math.round((fraction ?? 0) * 100000) / 100000)
+  log(`relocate chapter=${chapter} fraction=${(loc.fraction ?? 0).toFixed(4)}`)
+  // 上报完整定位（含 cfi）给 Kotlin 落库，用于重开恢复
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.onLocation) {
+    EPUBBridge.onLocation(JSON.stringify(loc))
   }
 })
 
@@ -143,14 +161,36 @@ $('zone-l').addEventListener('click', () => view.goLeft().then(() => {}))
 $('zone-r').addEventListener('click', () => view.goRight().then(() => {}))
 $('zone-m').addEventListener('click', () => $('bars').classList.toggle('hidden'))
 
+// 返回书架
+$('btn-back').addEventListener('click', e => {
+  e.stopPropagation()
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.back) EPUBBridge.back()
+  else history.back()
+})
+
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
 async function loadBook(path) {
   const res = await fetch(path)
   if (!res.ok) throw new Error(`fetch ${path} -> ${res.status}`)
   const blob = await res.blob()
   const file = new File([blob], path.split('/').pop(), { type: 'application/epub+zip' })
+  // 若 Kotlin 记录了上次定位，回传给 init 恢复到对应章节/页；否则从正文首章开始
+  const saved = typeof EPUBBridge !== 'undefined' && EPUBBridge.getSavedLocator
+    ? EPUBBridge.getSavedLocator()
+    : null
   await view.open(file)
-  await view.init({ showTextStart: true })
+  if (saved) {
+    log('restoring locator')
+    await view.init({ lastLocation: JSON.parse(saved), showTextStart: false })
+    // 诊断：等分页 reflow 落定后，对比恢复到的实际位置与保存值
+    setTimeout(() => {
+      const loc = view.lastLocation
+      log('settled fraction=' + (loc?.fraction ?? 'none').toFixed(4) + ' saved=' + (JSON.parse(saved).fraction ?? 0).toFixed(4))
+    }, 1200)
+  } else {
+    log('no saved locator, opening from start')
+    await view.init({ showTextStart: true })
+  }
 }
 
 loadBook('/book/current.epub')

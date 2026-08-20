@@ -9,10 +9,11 @@ import android.content.Context
  * 应用本地数据库（M0：书架与阅读进度）。
  *
  * v2：books.sourceUri → filePath（书改存私有目录副本）；旧 content:// 行已失效，清空重导。
+ * v3：reading_states 增加 locator 列，用于「重开接着上次位置」的精确定位恢复。
  */
 @Database(
     entities = [Book::class, BookReadingState::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,6 +32,11 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("DELETE FROM reading_states")
             }
         }
+        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE reading_states ADD COLUMN locator TEXT")
+            }
+        }
 
         @Volatile
         private var instance: AppDatabase? = null
@@ -41,7 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

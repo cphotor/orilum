@@ -14,17 +14,22 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewAssetLoader
+import com.folioepub.data.book.AppDatabase
+import com.folioepub.data.book.BookReadingState
+import com.folioepub.data.book.BookRepository
 import com.folioepub.util.FileLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
 
-/** JS relocate 回调。 */
-fun interface RelocateCallback {
-    fun onRelocate(index: Int, fraction: Double)
+/** JS relocate 回调：携带 foliate `lastLocation` 的 JSON 序列化。 */
+fun interface LocatorCallback {
+    fun onLocator(locatorJson: String)
 }
 
 /**
@@ -43,6 +48,16 @@ class ReaderActivity : ComponentActivity() {
 
     /** 当前要打开的书（私有目录内 epub 副本路径；null → 回退内置示例书，便于快速自测）。 */
     private var bookPath: String? = null
+
+    /** 对应书在主键；>=0 才做进度存取。示例书（无 id）只读不存。 */
+    private var bookId: Long = -1L
+
+    private lateinit var repository: BookRepository
+    private lateinit var scope: kotlinx.coroutines.CoroutineScope
+
+    /** 上次保存的 locator JSON；供 reader.html 在 init 时回传以恢复位置。 */
+    @Volatile
+    private var savedLocator: String? = null
 
     private val assetLoader: WebViewAssetLoader by lazy {
         WebViewAssetLoader.Builder()
@@ -85,19 +100,48 @@ class ReaderActivity : ComponentActivity() {
         )
     }
 
-    private val bridge = RelocateCallback { index, fraction ->
-        Log.d(TAG, "relocate index=$index fraction=$fraction")
-        val pct = (fraction * 100).toInt()
-        Toast.makeText(this, "第 ${index + 1} 章 · ${pct}%", Toast.LENGTH_SHORT).show()
+    private val bridge = LocatorCallback { locatorJson ->
+        parseLocation(locatorJson)?.let { (index, fraction) ->
+            Log.d(TAG, "relocate index=$index fraction=$fraction")
+            FileLogger.d(TAG, "relocate index=$index fraction=$fraction")
+        }
+        // 异步落盘（每次翻页写一行，字段用 locator JSON 做精确定位）
+        scope.launch(Dispatchers.IO) {
+            val (index, fraction) = parseLocation(locatorJson)
+                ?: return@launch
+            repository.saveReadingState(
+                BookReadingState(
+                    bookId = bookId,
+                    chapter = index,
+                    progress = fraction,
+                    locator = locatorJson,
+                ),
+            )
+        }
     }
+
+    /** 从 foliate lastLocation 提取 section.current（章节索引）与 fraction（全书进度）。 */
+    private fun parseLocation(json: String): Pair<Int, Double>? = runCatching {
+        val o = org.json.JSONObject(json)
+        val index = o.optJSONObject("section")?.optInt("current", 0) ?: 0
+        val fraction = o.optDouble("fraction", 0.0)
+        index to fraction
+    }.getOrNull()
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FileLogger.init(applicationContext)
         bookPath = intent?.getStringExtra(EXTRA_BOOK_PATH)
-        Log.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath")
-        FileLogger.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath")
+        bookId = intent?.getLongExtra(EXTRA_BOOK_ID, -1L) ?: -1L
+        scope = lifecycleScope
+        repository = BookRepository(AppDatabase.get(this).bookDao())
+        if (bookId >= 0) {
+            // 启动前同步预载上次定位，保证 reader.html 的 getSavedLocator 稳定返回
+            savedLocator = kotlinx.coroutines.runBlocking { repository.readingState(bookId)?.locator }
+        }
+        Log.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
+        FileLogger.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         // 沉浸式（隐藏状态栏/导航栏），M1 会做成可收起
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
@@ -174,28 +218,37 @@ class ReaderActivity : ComponentActivity() {
             },
         )
 
-        webView.addJavascriptInterface(EPUBBridge(bridge), "EPUBBridge")
+        webView.addJavascriptInterface(
+            EPUBBridge(bridge, { savedLocator }) { finish() },
+            "EPUBBridge",
+        )
         webView.loadUrl(ASSET_BASE + "assets/reader.html")
     }
 
     override fun onBackPressed() {
-        // 拦下 WebView 内部历史回退，改为 foliate 上一页
-        if (webView.canGoBack()) {
-            webView.evaluateJavascript(
-                "window.folioWebView && window.folioWebView.prev ? window.folioWebView.prev() : null",
-                null,
-            )
-        } else {
-            super.onBackPressed()
-        }
+        // 系统返回位：退出阅读器（翻页用三区点击，避免手势返回被吞成翻页污染进度）
+        finish()
     }
 }
 
 /** 暴露给 JS 的桥接对象（addJavascriptInterface 名：EPUBBridge）。 */
-class EPUBBridge(private val cb: RelocateCallback) {
+class EPUBBridge(
+    private val cb: LocatorCallback,
+    private val savedLocatorProvider: () -> String?,
+    private val exit: () -> Unit,
+) {
 
+    /** foliate 每次 relocate 回调：携带 `JSON.stringify(view.lastLocation)`。 */
     @JavascriptInterface
-    fun onRelocate(index: Int, fraction: Double) = cb.onRelocate(index, fraction)
+    fun onLocation(locatorJson: String) = cb.onLocator(locatorJson)
+
+    /** 返回上次保存的定位 JSON（无则 null），供 init({ lastLocation }) 恢复章节/页。 */
+    @JavascriptInterface
+    fun getSavedLocator(): String? = savedLocatorProvider()
+
+    /** 顶部「返回书架」：正常退出阅读器（不触发任何翻页）。 */
+    @JavascriptInterface
+    fun back() = exit()
 
     @JavascriptInterface
     fun log(msg: String) = FileLogger.d("FolioEpub.js", msg)
@@ -203,6 +256,8 @@ class EPUBBridge(private val cb: RelocateCallback) {
 
 /** 由书架启动阅读器时传入的书文件绝对路径。 */
 const val EXTRA_BOOK_PATH = "book_file_path"
+/** 由书架启动阅读器时传入的书主键（>=0 才存取进度）。 */
+const val EXTRA_BOOK_ID = "book_id"
 
 private const val ASSET_BASE = "https://appassets.androidplatform.net/"
 private const val TAG = "FolioEpub.Reader"
