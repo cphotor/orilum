@@ -338,9 +338,9 @@ view.addEventListener('error', e => {
   toast('渲染出错')
 })
 
-// 三区点击
-$('zone-l').addEventListener('click', () => view.goLeft().then(() => {}))
-$('zone-r').addEventListener('click', () => view.goRight().then(() => {}))
+// 三区点击（向左/右翻页前先关闭标题栏/工具栏）
+$('zone-l').addEventListener('click', () => { hideBars(); view.goLeft().then(() => {}) })
+$('zone-r').addEventListener('click', () => { hideBars(); view.goRight().then(() => {}) })
 $('zone-m').addEventListener('click', () => {
   $('bars').classList.toggle('hidden')
 })
@@ -398,6 +398,7 @@ const buildTOC = (items, parent) => {
 }
 
 const openTOC = () => {
+  hideBars() // 打开目录前先关闭标题栏/工具栏，避免两者同屏遮挡阅读
   $('toc-wrap').classList.add('show')
   // 首次打开时构建目录；默认全部展开，便于定位当前章
   if (!$('toc-list').firstElementChild && view.book?.toc) {
@@ -416,6 +417,7 @@ const openTOC = () => {
 }
 
 const closeTOC = () => $('toc-wrap').classList.remove('show')
+const hideBars = () => $('bars').classList.add('hidden')
 
 const setCurrentToc = href => {
   if (currentTocEl) currentTocEl.classList.remove('current')
@@ -509,9 +511,10 @@ addEventListener('touchmove', e => {
   touch.lastX = t.clientX
   touch.lastY = t.clientY
   touch.time = e.timeStamp
-  // 判定为横向滑动：锁死方向、阻止默认滚动与点击穿透
+  // 判定为横向滑动：先关闭栏，锁死方向、阻止默认滚动与点击穿透
   if (Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
     e.preventDefault()
+    hideBars()
     const r = view.renderer
     if (r) r.scrollBy(-(x - touch.dx), 0) // 负增量取反：左滑→scrollLeft 增大→露出下一页
     touch.dx = x
