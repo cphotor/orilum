@@ -509,8 +509,10 @@ const SWIPE_LIMIT = 48 // 触发翻页的最小水平位移(px)
 let touch = { startX: 0, startY: 0, time: 0, dx: 0, lastX: 0, lastY: 0, vx: 0, vy: 0, active: false }
 
 addEventListener('touchstart', e => {
-  // 工具栏/占用区域内的触摸不参与滑动翻页（进度条拖动、按钮点击等）
-  if (e.target.closest?.('#bars')) return
+  // 工具栏/目录抽屉区域内的触摸不参与滑动翻页（进度条拖动、目录点击等）。
+  // 必须排除 #toc-wrap，否则在目录内点击小标题时 touchend 会触发 renderer.snap()，
+  // 与 goTo(小标题) 的 scrollToAnchor 并发竞争滚轮位置，导致“同章小标题不跳转/偶尔不准”。
+  if (e.target.closest?.('#bars') || e.target.closest?.('#toc-wrap')) return
   if (e.touches.length !== 1) return
   const t = e.touches[0]
   touch = {
