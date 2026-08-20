@@ -21,6 +21,8 @@ import androidx.webkit.WebViewAssetLoader
 import com.folioepub.data.book.AppDatabase
 import com.folioepub.data.book.BookReadingState
 import com.folioepub.data.book.BookRepository
+import com.folioepub.data.settings.ReaderSettings
+import com.folioepub.data.settings.ReaderSettingsStore
 import com.folioepub.util.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,6 +56,7 @@ class ReaderActivity : ComponentActivity() {
     private var bookId: Long = -1L
 
     private lateinit var repository: BookRepository
+    private lateinit var settingsStore: ReaderSettingsStore
     private lateinit var scope: kotlinx.coroutines.CoroutineScope
 
     /** 上次保存的 locator JSON；供 reader.html 在 init 时回传以恢复位置。 */
@@ -137,6 +140,7 @@ class ReaderActivity : ComponentActivity() {
         bookId = intent?.getLongExtra(EXTRA_BOOK_ID, -1L) ?: -1L
         scope = lifecycleScope
         repository = BookRepository(AppDatabase.get(this).bookDao())
+        settingsStore = ReaderSettingsStore(File(filesDir, "settings"))
         if (bookId >= 0) {
             // 启动前同步预载上次定位，保证 reader.html 的 getSavedLocator 稳定返回
             savedLocator = kotlinx.coroutines.runBlocking { repository.readingState(bookId)?.locator }
@@ -222,7 +226,13 @@ class ReaderActivity : ComponentActivity() {
         )
 
         webView.addJavascriptInterface(
-            EPUBBridge(bridge, { savedLocator }, { finish() }, bottomInset()),
+            EPUBBridge(
+                bridge,
+                { savedLocator },
+                settingsStore,
+                { finish() },
+                bottomInset(),
+            ),
             "EPUBBridge",
         )
         webView.loadUrl(ASSET_BASE + "assets/reader.html")
@@ -248,6 +258,7 @@ class ReaderActivity : ComponentActivity() {
 class EPUBBridge(
     private val cb: LocatorCallback,
     private val savedLocatorProvider: () -> String?,
+    private val settingsStore: ReaderSettingsStore,
     private val exit: () -> Unit,
     private val bottomInset: Int,
 ) {
@@ -259,6 +270,24 @@ class EPUBBridge(
     /** 返回上次保存的定位 JSON（无则 null），供 init({ lastLocation }) 恢复章节/页。 */
     @JavascriptInterface
     fun getSavedLocator(): String? = savedLocatorProvider()
+
+    /** 返回当前生效设置 JSON（用户套；无则默认套）。 */
+    @JavascriptInterface
+    fun getSettings(): String = settingsStore.load().toJson(2)
+
+    /** 保存用户设置（覆盖式写入整份 JSON）。 */
+    @JavascriptInterface
+    fun saveSettings(json: String?): Boolean = ReaderSettings.fromJson(json)
+        .let { settingsStore.save(it); log("saveSettings -> theme=${it.theme}") ; true }
+
+    /** 一键重置设置：删除用户套，之后返回默认套 JSON。 */
+    @JavascriptInterface
+    fun resetSettings(): String {
+        settingsStore.reset()
+        val d = ReaderSettings.DEFAULT
+        log("resetSettings -> DEFAULT")
+        return d.toJson(2)
+    }
 
     /** 底部导航区/手势条高度(px)，用于把底部工具栏抬到系统导航之上，避免被遮挡。 */
     @JavascriptInterface

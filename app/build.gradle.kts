@@ -87,6 +87,9 @@ dependencies {
 
     // 单元测试
     testImplementation(libs.junit)
+    // 真实 org.json：本地单测用 android.jar 的打桩 org.json 会抛 not mocked，
+    // 故在 test classpath 显式引入真实实现（不影响主 Release 运行时性能）。
+    testImplementation(libs.org.json)
 }
 
 /** foliate-js 版本号（改动升级时更新此处即可）。 */

@@ -12,6 +12,7 @@ composeBom = "2024.09.03"
 room = "2.6.1"
 webkit = "1.12.1"
 junit = "4.13.2"
+json = "20240303"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -38,6 +39,8 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 
 # 单元测试
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# 真实 org.json（本地 JVM 单测里 android.jar 的 org.json 是打桩的，运行会抛 not mocked）
+org-json = { group = "org.json", name = "json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
