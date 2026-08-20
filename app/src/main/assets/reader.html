@@ -570,14 +570,15 @@ async function loadBook(path) {
     ? EPUBBridge.getSavedLocator()
     : null
   await view.open(file)
-  if (saved) {
-    log('restoring locator')
-    await view.init({ lastLocation: JSON.parse(saved), showTextStart: false })
-    // 诊断：等分页 reflow 落定后，对比恢复到的实际位置与保存值
-    setTimeout(() => {
-      const loc = view.lastLocation
-      log('settled fraction=' + (loc?.fraction ?? 'none').toFixed(4) + ' saved=' + (JSON.parse(saved).fraction ?? 0).toFixed(4))
-    }, 1200)
+  const last = saved ? JSON.parse(saved) : null
+  if (last?.cfi) {
+    // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
+    log('restoring locator by cfi')
+    await view.goTo(last.cfi)
+    setTimeout(() => log('settled cfi=' + (view.lastLocation?.cfi ?? 'none')), 1200)
+  } else if (last) {
+    log('restoring locator (fallback fraction)')
+    await view.init({ lastLocation: last, showTextStart: false })
   } else {
     log('no saved locator, opening from start')
     await view.init({ showTextStart: true })
