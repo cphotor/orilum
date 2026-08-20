@@ -168,6 +168,57 @@ $('btn-back').addEventListener('click', e => {
   else history.back()
 })
 
+// ── 滑动翻页（默认动画）───────────────────────────
+// 走 foliate 原生分栏滚动：拖动时 renderer.scrollBy(dx,0) 会真切露出相邻列，
+// 实现"滑动过程中两页同屏"；松手用 next/prev 提交翻页（animated 平滑滑动），
+// 位移过小则 snap() 吸附回当前页。
+// TODO(settings): 翻页动画（滑动/无）需要一个后台开关，暂未实现，先默认滑动。
+const SWIPE_LIMIT = 48 // 触发翻页的最小水平位移(px)
+let touch = { startX: 0, startY: 0, time: 0, dx: 0, lastX: 0, lastY: 0, vx: 0, vy: 0, active: false }
+
+addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) return
+  const t = e.touches[0]
+  touch = {
+    startX: t.clientX, startY: t.clientY,
+    time: e.timeStamp, dx: 0, lastX: t.clientX, lastY: t.clientY, vx: 0, vy: 0, active: true,
+  }
+}, { passive: true })
+
+addEventListener('touchmove', e => {
+  if (!touch.active) return
+  const t = e.touches[0]
+  const x = t.clientX - touch.startX
+  const y = t.clientY - touch.startY
+  const dt = Math.max(1, e.timeStamp - touch.time)
+  touch.vx = (t.clientX - touch.lastX) / dt
+  touch.vy = (t.clientY - touch.lastY) / dt
+  touch.lastX = t.clientX
+  touch.lastY = t.clientY
+  touch.time = e.timeStamp
+  // 判定为横向滑动：锁死方向、阻止默认滚动与点击穿透
+  if (Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
+    e.preventDefault()
+    const r = view.renderer
+    if (r) r.scrollBy(-(x - touch.dx), 0) // 负增量取反：左滑→scrollLeft 增大→露出下一页
+    touch.dx = x
+  }
+}, { passive: false })
+
+addEventListener('touchend', e => {
+  if (!touch.active) return
+  touch.active = false
+  const r = view.renderer
+  if (!r) return
+  if (touch.dx <= -SWIPE_LIMIT) r.next()          // 左滑 → 下一页
+  else if (touch.dx >= SWIPE_LIMIT) r.prev()      // 右滑 → 上一页
+  else r.snap(touch.vx, touch.vy)                 // 位移不足 → 吸附回当前页
+}, { passive: true })
+
+addEventListener('touchcancel', () => {
+  touch.active = false
+}, { passive: true })
+
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
 async function loadBook(path) {
   const res = await fetch(path)
@@ -194,7 +245,11 @@ async function loadBook(path) {
 }
 
 loadBook('/book/current.epub')
-  .then(() => log('book opened'))
+  .then(() => {
+    log('book opened')
+    // 启用 foliate 翻页动画（平滑滑动 300ms）
+    view.renderer?.setAttribute?.('animated', '')
+  })
   .catch(err => {
     console.error(err)
     // 主动上报给 Kotlin（此设备 WebView 不回调 onConsoleMessage）
