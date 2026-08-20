@@ -206,12 +206,14 @@
     padding: 8px 0;
   }
   #toc-list ol { list-style: none; margin: 0; padding: 0; }
+  #toc-list li > ol { padding-left: 1em; } /* 子级逐层缩进 */
   #toc-list li { position: relative; }
   #toc-list li.collapsed > ol { display: none; }
   #toc-list .toc-item {
+    position: relative; /* 定位 expander 的锚点 */
     display: flex;
     align-items: center;
-    padding: 12px 16px;
+    padding: 12px 16px 12px 36px; /* 左侧预留固定对齐槽，三角形不进入文本流 */
     color: #333;
     text-decoration: none;
     font-size: 15px;
@@ -220,19 +222,28 @@
   }
   #toc-list .toc-item:active { background: #efece4; }
   #toc-list .toc-item.current { color: #a06b1f; font-weight: 600; }
+  /* 展开/折叠三角形：固定在文本对齐线之外的槽位上，不参与文本对齐，因此
+     有子章节与无子章节的目录文字左缘完全一致 */
   #toc-list .expander {
-    flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    margin-right: 2px;
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: none;
     color: #999;
-    font-size: 12px;
+    font-size: 15px;
+    line-height: 1;
     cursor: pointer;
+    transform: translateY(-50%) rotate(0deg);
     transition: transform 0.2s ease;
   }
-  #toc-list li.collapsed > .toc-item .expander { transform: rotate(-90deg); }
+  #toc-list li.collapsed > .toc-item .expander { transform: translateY(-50%) rotate(-90deg); }
 </style>
 </head>
 <body>
@@ -367,6 +378,7 @@ const buildTOC = (items, parent) => {
     a.className = 'toc-item'
     a.textContent = item.label
     if (item.subitems?.length) {
+      li.classList.add('collapsed') // 默认折叠，仅当前阅读章节展开
       const btn = document.createElement('button')
       btn.type = 'button'
       btn.className = 'expander'
@@ -411,9 +423,16 @@ const openTOC = () => {
     p.style.cssText = 'color:#999;text-align:center;padding:24px 0;'
     $('toc-list').append(p)
   }
-  $('toc-list').querySelectorAll('li.collapsed').forEach(li => li.classList.remove('collapsed'))
+  // 展开当前阅读章节所在的整条祖先链，其余保持折叠
   setCurrentToc(view.lastLocation?.tocItem?.href)
-  if (currentTocEl) currentTocEl.scrollIntoView({ block: 'center' })
+  if (currentTocEl) {
+    let node = currentTocEl.closest('li')
+    while (node) {
+      node.classList.remove('collapsed')
+      node = node.parentElement.closest ? node.parentElement.closest('li') : null
+    }
+    currentTocEl.scrollIntoView({ block: 'center' })
+  }
 }
 
 const closeTOC = () => $('toc-wrap').classList.remove('show')
