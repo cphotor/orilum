@@ -12,12 +12,12 @@ plugins {
 }
 
 android {
-    namespace = "com.folioepub"
+    namespace = "com.orilum"
     compileSdk = 35
     buildToolsVersion = "35.0.0"
 
     defaultConfig {
-        applicationId = "com.folioepub"
+        applicationId = "com.orilum"
         minSdk = 23
         targetSdk = 35
         versionCode = 1

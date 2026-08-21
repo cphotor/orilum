@@ -1,4 +1,4 @@
-// FolioEpub 根构建脚本：仅声明插件，不在此配置项目。
+// Orilum 根构建脚本：仅声明插件，不在此配置项目。
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false

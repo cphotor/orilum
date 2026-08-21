@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id" xml:lang="zh-CN">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="book-id">urn:uuid:sample-folioepub-0001</dc:identifier>
-    <dc:title>FolioEpub 示例书</dc:title>
+    <dc:identifier id="book-id">urn:uuid:sample-orilum-0001</dc:identifier>
+    <dc:title>Orilum 示例书</dc:title>
     <dc:language>zh-CN</dc:language>
-    <dc:creator>FolioEpub</dc:creator>
+    <dc:creator>Orilum</dc:creator>
     <meta property="dcterms:modified">2026-08-20T00:00:00Z</meta>
   </metadata>
   <manifest>

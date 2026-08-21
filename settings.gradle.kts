@@ -1,4 +1,4 @@
-// FolioEpub 工程仓库配置
+// Orilum 工程仓库配置
 pluginManagement {
     repositories {
         google {
@@ -23,6 +23,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FolioEpub"
+rootProject.name = "Orilum"
 
 include(":app")

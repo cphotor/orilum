@@ -1,4 +1,4 @@
-# FolioEpub — 项目进度
+# Orilum — 项目进度
 
 > 本文档记录阶段进度与关键决策，配合 `docs/ARCHITECTURE-FOLIATE.md` 使用。
 > 更新规则：完成阶段任务/重大变化时追加记录。
@@ -76,7 +76,7 @@
 - ES Module / fetch 依赖跨域问题 → 用 `WebViewAssetLoader` 走 https 虚拟域，不用 `file://`。
 - 定位以「章节 + 章内比例」与 CFI 兼容为主，进度直接来自 foliate `relocate` 上报。
 - **书源改存应用私有目录副本**（对齐 Moon+/ReadEra）：不长期依赖 SAF content://。启动授权生命周期在重启后不可靠（vivo 实测 openInputStream 返回 null → 空白屏），故导入即拷贝进 `filesDir/books/`。
-- **平板上不要依赖系统 logcat 定位问题**：vivo/OPPO 系统层日志限流不可关闭、AS 日志面板也丢日志。关键调试信息统一走内置 `FileLogger` 落盘文件，命令 `adb shell run-as com.folioepub cat files/logs/sec_*.txt` 读取。
+- **平板上不要依赖系统 logcat 定位问题**：vivo/OPPO 系统层日志限流不可关闭、AS 日志面板也丢日志。关键调试信息统一走内置 `FileLogger` 落盘文件，命令 `adb shell run-as com.orilum cat files/logs/sec_*.txt` 读取。
 
 ---
 
