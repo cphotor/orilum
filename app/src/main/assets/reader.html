@@ -1579,7 +1579,7 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('背景色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
   el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
-    settings.autoContinue = v; saveSettings() // 进度续读由后端 BookReadingState 控制，此开关后续接线
+    settings.autoContinue = v; saveSettings() // 开启后，下次启动 app 直接进入上次阅读的书（定位恢复始终默认生效）
   }))
   el.append(settingsSwitch('显示页码', 'set-page-num', v => {
     settings.pageNum = v; saveSettings() // 页码显示依赖分页计数方案，见 PROJECT_STATUS TODO
@@ -1700,8 +1700,12 @@ addEventListener('touchmove', e => {
   if (Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
     e.preventDefault()
     hideBars()
-    const r = view.renderer
-    if (r) r.scrollBy(-(x - touch.dx), 0) // 负增量取反：左滑→scrollLeft 增大→露出下一页
+    // 仅动画模式做「拖动两页同屏」的滑动预览；无动画模式仍累计 dx 判定方向，
+    // 松手后 next/prev 由 'animated' 属性缺失而瞬间跳转，实现真正的「无翻页动画」。
+    if (settings.pageAnim) {
+      const r = view.renderer
+      if (r) r.scrollBy(-(x - touch.dx), 0) // 负增量取反：左滑→scrollLeft 增大→露出下一页
+    }
     touch.dx = x
   }
 }, { passive: false })
@@ -1726,12 +1730,13 @@ async function loadBook(path) {
   if (!res.ok) throw new Error(`fetch ${path} -> ${res.status}`)
   const blob = await res.blob()
   const file = new File([blob], path.split('/').pop(), { type: 'application/epub+zip' })
-  // 若 Kotlin 记录了上次定位，回传给 init 恢复到对应章节/页；否则从正文首章开始
-  const saved = typeof EPUBBridge !== 'undefined' && EPUBBridge.getSavedLocator
-    ? EPUBBridge.getSavedLocator()
-    : null
+  // 记住每本书的阅读位置是默认能力：始终用后端记录的上次定位恢复，与「打开时续读」开关无关
+  let last = null
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.getSavedLocator) {
+    const s = EPUBBridge.getSavedLocator()
+    if (s) last = JSON.parse(s)
+  }
   await view.open(file)
-  const last = saved ? JSON.parse(saved) : null
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
     log('restoring locator by cfi')

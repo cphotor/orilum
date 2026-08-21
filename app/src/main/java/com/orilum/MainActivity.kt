@@ -33,11 +33,14 @@ import com.orilum.data.book.AppDatabase
 import com.orilum.data.book.Book
 import com.orilum.data.book.BookImporter
 import com.orilum.data.book.BookRepository
+import com.orilum.data.settings.ReaderSettingsStore
 import com.orilum.ui.reader.EXTRA_BOOK_ID
 import com.orilum.ui.reader.EXTRA_BOOK_PATH
 import com.orilum.ui.reader.ReaderActivity
 import com.orilum.ui.theme.OrilumTheme
+import com.orilum.util.FileLogger
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * 自定义书架（M0 闭环）：
@@ -49,8 +52,17 @@ class MainActivity : ComponentActivity() {
     private val importer by lazy { BookImporter(this, repository) }
     private val booksFlow by lazy { repository.books() }
 
+    /** 阅读配置；autoContinue 决定启动书架时是否自动进入最后阅读的书。 */
+    private val settingsStore by lazy { ReaderSettingsStore(File(filesDir, "settings")) }
+
+    /** 记录最后打开的书主键，供「打开时续读」冷启动跳转。 */
+    private val prefs by lazy { getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 「打开时续读」：启动书架时若开关开启且记录过最后阅读的书，则自动进入阅读器。
+        // 每次冷启动只跳一次，避免用户返回书架后又弹回阅读页。
+        if (savedInstanceState == null) maybeContinueLastBook()
 
         setContent {
             OrilumTheme {
@@ -113,6 +125,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openReader(book: Book) {
+        // 记录最后打开的书，供「打开时续读」下次冷启动自动进入
+        prefs.edit().putLong(KEY_LAST_BOOK_ID, book.id).apply()
         startActivity(
             Intent(this, ReaderActivity::class.java)
                 .putExtra(EXTRA_BOOK_PATH, book.filePath)
@@ -123,6 +137,29 @@ class MainActivity : ComponentActivity() {
     /** 无 extra → ReaderActivity 回退内置示例书。 */
     private fun openSampleBook() {
         startActivity(Intent(this, ReaderActivity::class.java))
+    }
+
+    /** 「打开时续读」：开关开启且记录过最后阅读的书 → 应用启动时自动进入该书阅读器。 */
+    private fun maybeContinueLastBook() {
+        if (!settingsStore.load().autoContinue) return
+        val lastId = prefs.getLong(KEY_LAST_BOOK_ID, -1L)
+        if (lastId <= 0) return
+        lifecycleScope.launch {
+            val book = repository.getBook(lastId)
+            if (book != null) {
+                FileLogger.i(TAG, "continue last book id=$lastId title=${book.title}")
+                openReader(book)
+            } else {
+                // 最后阅读的书已被移除：清理记录，回到书架
+                FileLogger.i(TAG, "last book gone, clear key bookId=$lastId")
+                prefs.edit().remove(KEY_LAST_BOOK_ID).apply()
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "Orilum.Main"
+        private const val KEY_LAST_BOOK_ID = "last_book_id"
     }
 }
 
