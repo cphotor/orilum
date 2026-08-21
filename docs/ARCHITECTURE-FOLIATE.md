@@ -1,11 +1,11 @@
-# Foliate 架构与里程碑（FoliateEpub 阅读内核）
+# Foliate 架构与里程碑（Orilum 阅读内核）
 
 > 本文件描述以 **foliate-js 渲染 + 自建 Kotlin 数据层** 为核心的新阅读内核。
 > 取代早期基于 `EpubNavigatorFragment` 的方案（后者分页被锁死为双栏对开、且无连续滚动与卷页能力）。
 
-- 状态：**待评审**，尚未编码
-- 原则：**地基先行、逐功能完善** —— 不抢跑 MVP；每个功能做完整、确认稳定后再进入下一个
-- 编写日期：2026-08-20
+- 状态：**施工中**。本文书为**设计稿 + 工作清单**；进度以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 为唯一溯源。
+- 原则：**地基先行、逐功能完善** —— 不抢跑，每个功能做完整、确认稳定后再进入下一个
+- 编写日期：2026-08-20（里程碑部分 2026-08-21 重构为「已完成 / 待办」清单）
 
 ---
 
@@ -35,7 +35,7 @@
 │  · 解析器：解 zip → 读 container.xml → opf/spine/目录     │
 │  · 定位：章节 + 字符偏移 / CFI 兼容                       │
 │  · 持久层：进度 / 书签 / 笔记 / 修订（Room）               │
-│  · 字体：M2 五分类 + L1/L2/L3 分层                       │
+│  · 字体：样式体系（主题 + 逐条 + UI 控件）分层             │
 ├──────────────────────────────────────────────────────┤
 │ 通信桥（JSBridge）                                      │
 │  · Kotlin ⇄ WebView（JS）：派发章节、上报进度、注入样式      │
@@ -105,11 +105,13 @@
 
 ---
 
-## 6. 字体与排版（M2 五分类 + L1/L2/L3）
+## 6. 字体与排版（样式体系）
 
-- foliate-js 提供 `fontSize/fontFamily/settings` 等原生项 ✅；但 **M2 五分类（正文/标题/代码/粗/斜）与“跟随原书样式”** 是我们的差异点，需自写。
-- 实现载体：foliate-js 的 `transformTarget` 事件钩子（渲染前改写 DOM）+ 注入自定义 CSS 层。
-- 沿用既定模型：
+> ⚠️ **本节描述的是旧模式（五分类 + L1/L2/L3）**，2026-08-21 已被**样式系统**（主题列表 + 逐条输入 + UI 常驻控件）整体取代。完整新设计见 `PROJECT_STATUS.md`「样式系统」。下方保留旧思路作设计史参考。
+
+- foliate-js 提供 `fontSize/fontFamily/settings` 等原生项 ✅；但**多分类字体（正/题/码/粗/斜）与“跟随原书样式”/替换字体** 是我们的差异点，需自写。
+- 实现载体：foliate-js 的 `transformTarget` 事件钩子（渲染前改写 DOM）+ 注入自定义 CSS 层（`reader.html` 的 `buildReadingCSS`）。
+- 新样式体系分层（取代 L1/L2/L3）：
   - L1 底座（原书样式 / 系统预设主题）
   - L2 用户导入样式表开关
   - L3 逐项指定（最高优先）+ 一键还原逐项
@@ -157,7 +159,7 @@ foliate 只做：DOM 挂载、CSS 流式排版、分页计算、CFI 映射、交
 
 - **CFI 以原始未处理 XHTML 为基准**；预处理只做视觉替换，同时在 Kotlin 层维护一份「原始位置 ↔ 替换后 DOM」映射表。
 - foliate 上报选区/CFI 时，Kotlin 查表反向映射回原始文档的 CFI，用于书签、笔记持久化。
-- 若不维护映射，高亮、笔记跳转会全部错位——这是本方案最易踩坑点，M2 需一并实现并加大单测覆盖。
+- 若不维护映射，高亮、笔记跳转会全部错位——这是本方案最易踩坑点，随「待办 · 外置 QuickJS 预处理」一并实现并加大单测覆盖。
 
 ### 7.2 技术选型（Android）
 
@@ -175,69 +177,58 @@ foliate 只做：DOM 挂载、CSS 流式排版、分页计算、CFI 映射、交
 
 ---
 
-## 8. 里程碑（逐功能完善，每项完整再下一项）
+## 8. 工作清单（已完成 / 待办）
 
-> 每阶段结束：单元测试 + 真机/平板回归 + 记录到 `PROJECT_STATUS.md`，评审通过再继续。
+> 每项结束：单元测试 + 真机/平板回归 + 记录到 `PROJECT_STATUS.md`。进度以 `PROJECT_STATUS.md` 为唯一溯源，本节为**职能全集**（含后续长期目标）。
 
-### M0：地基（数据层 + shell + 渲染最小管线）
-- [ ] 自建 EPUB 解析器（zip/opf/spine/toc）→ 单元测试通过
-- [ ] 书库层：`Book` + `BookRepository`（沿用既有 Room 基建与 SAF 原书引用）
-- [ ] 自建定位（章节+偏移）+ 进度持久化（纯逻辑、可单测）
-- [ ] 薄 Kotlin 壳 + 单个 WebView + foliate-js 集成，能打开 EPUB 渲染第一章（paginated）
-- [ ] 竖起自定义书架的「选书 → 解析 → 渲染」新闭环
+### ✅ 已完成
 
-### M1：翻页式阅读（单栏整页）
-- [ ] 一屏一页、左右翻页（先平滑滑动）
-- [ ] 原生 pager 字面翻页 + 预加载
-- [ ] 进度上报+存读恢复（从书架点开接着上次位置）
-- [ ] 目录/章节导航
-- [ ] 滚动式（`flow=scrolled`）全书连续滚动 + 模式切换
+- ✅ **数据层（自建）**：`EpubParser` 解析 zip → container.xml → OPF(spine/manifest/toc) → `EpubBook`；单元测试覆盖 EPUB3/EPUB2、路径大小写容错、目录关联。
+- ✅ **定位模型**：`Location`（章节+章内偏移）+ `ProgressConverter`（章节↔全书进度互转、越界钳制），纯逻辑可单测。
+- ✅ **书库层**：`Book` / `BookReadingState`（Room）+ `BookDao` / `AppDatabase` / `BookRepository`。
+- ✅ **渲染最小管线**：`assets/reader.html` + foliate-js `<foliate-view flow="paginated">`；`WebViewAssetLoader` 走 https 虚拟域解决 ES Module/fetch 跨域。
+- ✅ **SAF/选书闭环**：SAF 选书 → 私有化落盘 `filesDir/books/`（`BookImporter`）→ 交 foliate 渲染；重启后仍可读（脱离 SAF content:// 生命周期）。
+- ✅ **翻页阅读**：三区点击左/右/中翻页切工具栏；滑动翻页（`renderer.scrollBy` + `next()/prev()`）；页边距行宽控制单列分栏。
+- ✅ **进度存读恢复**：`reading_states.locator`（foliate `lastLocation` JSON）落库，重开 `init({ lastLocation })` 精确定位；退出按钮 `lib ›` 回书架，系统返回=退出（不污染翻页）。
+- ✅ **目录导航（TOC）**：多级目录渲染、点击跳转、当前章高亮、遮罩/✕ 关闭；与设置抽屉互斥。
+- ✅ **内置文件日志**：`FileLogger` 落盘 `filesDir/logs/`（按天、1MB 轮转），绕开 vivo/OPPO 系统 logcat 限流。
+- ✅ **设置面板**：右侧抽屉 + 单页面板 + 多级下钻页面栈；`ReaderSettings`/`ReaderSettingsStore` 双套（默认 + 用户 `filesDir/settings/reader.json`），`EPUBBridge.getSettings/saveSettings/resetSettings` 双向同步；改动即 `setStyles(buildReadingCSS())` 实时生效 + 持久化。
+- ✅ **字体后端**：`FontParser`（TTF/OTF/TTC 的 cmap/name 解析，字节序自适应）+ `FontClassifier`（按覆盖归 中文/拉丁/通用/符号/无效，过滤不可用）+ `FontRepository`/`FontDao`（Room 持久化 + 用户目录导入）。
+- ✅ **字体 JS 面板**：`listFonts()` 动态拉取 → 字体选择页按**字体自身字形**渲染名称；「指定目录导入」入口；`/fonts/` handler 提供字节流。
+- ✅ **样式系统 · 三套主题 CSS**：`原书设置`/`现代模式`/`传统模式`（`LAYOUT_THEMES`，传统正文衬线）注入 `buildReadingCSS` 作默认层。
+- ✅ **样式系统 · 主题列表 UI**：设置面板「排版主题」列表单选，切换实时注入 + 持久化（`settings.layoutTheme`）。
 
-### M2：字体与排版落地
-- [ ] M2 五分类 + 跟随原书样式开关
-- [ ] L1/L2/L3 样式分层 + 一键还原
-- [ ] 排版参数（字号/行距/边距/缩进/对齐/主题）
+### ⏳ 待办（含后续长期目标）
 
-### M2.5：外置 QuickJS 预处理模块（科技渲染的地基）
-> 专业核先做「重计算外置」，再谈具体公式/乐谱渲染；M3–M5 的位图与标注都依赖这里的位置映射正确。
-- [ ] 集成 QuickJS-Android，封装调用 KaTeX、abcjs（输入文本 → 输出 SVG 字符串）
-- [ ] XHTML 扫描：识别 LaTeX / ABC / Mermaid 代码块，替换为 SVG
-- [ ] 维护「原始文档 ↔ 预处理后 DOM」位置映射，保证 CFI / 标注不漂移 + 单元测试
-
-### M3：卷页动画（原生 pager 插件）
-- [ ] 页面位图管线成熟（LRU/回收/热切换）
-- [ ] 卷页翻页动画接入，可与滑动切换/并存
-
-### M4：标注与修订
-> 依赖 M2.5 的位置映射正确性。
-- [ ] 高亮/下划线/笔记 + Room 持久化（overlayer + CFI 反向映射）
-- [ ] 选区→CFI 回溯、修订（改写/还原）
-
-### M5：科技渲染（foliate 侧仅轻量 transformTarget）
-> 重计算全部前置到 M2.5 的 QuickJS；此处只做搬运进 foliate 的轻量调整。
-- [ ] 公式（LaTeX/MathML）、ABC 乐谱、Mermaid 图表渲染链路
-- [ ] 代码高亮（Prism，前置统一）
-- [ ] 防断裂 CSS（随字体/排版层）
-
-### M6：网络与工具
-- [ ] OPDS 1/2、WiFi 传书、SAF 书籍目录（后端能力与阅读内核解耦）
-
-### M7：边界回归与性能
-- [ ] 50+ 复杂科技 EPUB 回归、Android 12–15 碎片化、内存/句柄泄漏、低端调优
+- ⏳ **样式系统 · UI 常驻控件层（下一步）**：字号滑块(根 em)/行距/边距跨主题保持；日夜整套配色 + 单独覆盖背景。
+- ⏳ **样式系统 · 逐条输入（手写选择器）**：选择题器(h1/p/code/strong/em…) × 属性(font-family/line-height…) + 值，列表管理，后者覆盖前者；`font-family` 特判为字体选择器。
+- ⏳ **样式系统 · 替换字体**：并入逐条层（`原书字体→可用字体` 特例），仅「原书」时生效。
+- ⏳ **样式系统 · 废弃迁移**：移除「中英分离 + unicode-range + 五分类双字体」旧实现，数据迁移到新主题体系。
+- ⏳ **样式系统 · 竖排**（待评估，低优先级）：`writing-mode: vertical-rl` + 竖排 CJK 标点替换 + 西文横放，定位为可选排版主题。
+- ⏳ **字体细节**：中文字体名真机复核展示；系统字体取舍策略（是否折叠/分组）。
+- ⏳ **书架增强**：续读百分比在书架列表展示；启动自动打开当前书开关。
+- ⏳ **翻页细节**：翻页动画开关（滑动/无）；页码显示（需先定 span/页计数方案）。
+- ⏳ **滚动式（全书连续）**：`flow=scrolled` 曾暂搁（跨章滚动受限）。方向：方向感知 + 异步预排，属引擎手术需整套回归。
+- ⏳ **外置 QuickJS 预处理（科技渲染地基）**：集成 QuickJS-Android 封装 KaTeX/abcjs（文本→SVG）；XHTML 扫描识别 LaTeX/ABC/Mermaid 替换为 SVG；维护「原始文档 ↔ 预处理后 DOM」位置映射保证 CFI 不漂移 + 单测。
+- ⏳ **卷页动画**：页面位图管线（LRU/回收/热切换）+ 卷页接入（可与滑动并存）。
+- ⏳ **标注与修订**：高亮/下划线/笔记 + Room 持久化（overlayer + CFI 反向映射）；选区→CFI 回溯、修订/还原。
+- ⏳ **科技渲染**（重计算前置到 QuickJS）：公式（LaTeX/MathML）、ABC 乐谱、Mermaid 图表链路；代码高亮（Prism 前置统一）；防断裂 CSS。
+- ⏳ **网络与工具**：OPDS 1/2、WiFi 传书、SAF 书籍目录（后端能力与阅读内核解耦）。
+- ⏳ **边界回归与性能**：50+ 复杂科技 EPUB 回归、Android 12–15 碎片化、内存/句柄泄漏、低端调优。
 
 ---
 
 ## 9. 决策录（含已拍板项）
 
 **已对齐确认**
-- 科技渲染：外置 QuickJS 预处理 → 干净 HTML 喂 foliate（§7），已纳入 M2.5。
-- 卷页动画：放在 M3（先滑动稳定、再卷页）——已定。
-- 位图 pager：M3 的位图管线作为卷页与动画的地基——已定。
-- 定位：CFI 以原始 XHTML 为基准 + 位置映射表，M2.5 落实——已定。
+- 科技渲染：外置 QuickJS 预处理 → 干净 HTML 喂 foliate（§7），见「待办 · 外置 QuickJS 预处理」。
+- 卷页动画：先滑动稳定、再卷页——已定。
+- 位图 pager：位图管线作为卷页与动画的地基——已定。
+- 定位：CFI 以原始 XHTML 为基准 + 位置映射表，随「外置 QuickJS 预处理」落实——已定。
 
-**剩余一个小决策点（不阻塞 M0/M1）**
-- **文本交互 vs 动画的取舍**：首版走「位图 pager（回复滑好、文本交互有限）」，M3 再评估是否引入每页独立 WebView 的提升文本交互路径。
+**剩余一个小决策点（不阻塞当前进度）**
+- **文本交互 vs 动画的取舍**：后续走「位图 pager（滑流畅、文本交互有限）」，做卷页动画时再评估是否引入每页独立 WebView 的提升文本交互路径。
 
 ---
 
-> 本文件为地基设计稿。评审通过后，按 M0 逐条实现，每条完成后更新 `PROJECT_STATUS.md`。
+> 本文件为设计稿 + 工作清单。逐项实现见上文清单，每条完成后更新 `PROJECT_STATUS.md`。

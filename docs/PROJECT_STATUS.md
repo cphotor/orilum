@@ -3,18 +3,19 @@
 > 本文档记录阶段进度与关键决策，配合 `docs/ARCHITECTURE-FOLIATE.md` 使用。
 > 更新规则：完成阶段任务/重大变化时追加记录。
 
-## 当前阶段：M0 地基
+## 当前阶段：样式系统（UI 控件常驻层）
 
-目标：`foliate-js 渲染 + 自建 Kotlin 数据层` 的最小可运行闭环。
+> 目标：`foliate-js 渲染 + 自建 Kotlin 数据层` 闭环已跑通（渲染/翻页/进度/目录/设置面板/字体）。
+> 当前推进「样式系统」工程（见下方「样式系统 · 工程进度」）。历史已完成工作见 `ARCHITECTURE-FOLIATE.md` §8「已完成」清单。
 
 ### 已完成
 
-#### M0 · 数据层（自建）
+#### 数据层（自建）
 - **EPUB 解析器**：纯 Kotlin 实现 `EpubParser`，解析 zip → container.xml → OPF (metadata/manifest/spine) → EPUB3 nav / EPUB2 NCX 目录，产出 `EpubBook` 模型。单元测试覆盖标准 EPUB3/EPUB2、路径大小写容错、目录关联场景。
 - **定位模型**：`Location`（章节 + 章内偏移）+ `ProgressConverter`（章节↔全书进度互转、越界钳制），纯逻辑、可单测。
 - **书库层**：`Book` / `BookReadingState`（Room），`BookDao` / `AppDatabase` / `BookRepository` 封装存取。
 
-#### M0 · WebView + foliate-js 渲染（本次完成）
+#### WebView + foliate-js 渲染（本次完成）
 - **依赖拉取**：Gradle 任务 `downloadFoliateJs` / `fetchFoliateJs` 从 npm 镜像下载 foliate-js 1.0.1 到 `assets/foliate-js`（构建期自动完成）。
 - **示例书**：`sample-epub-src/` 源码 + 构建任务 `makeSampleEpub` 打包成合法 EPUB3（mimetype 首条目 + STORED）到 `assets/sample/sample.epub`，含两个章节，第一章较长以验证「长章节多屏分页」。
 - **渲染管线**：
@@ -26,22 +27,22 @@
   - 三区左右翻页、章节切换 ✅
   - 加长第一章后能拆成多屏逐页推进 ✅（解决了「章节太短看不出超一屏分页」）
 
-### 进行中（M0-loop 已闭环，接近 M0 完成）
-- **M0-loop · 书架闭环 ✅**：SAF 选书 → 自建 `EpubParser` 解析 → 交 foliate-js 渲染。
+### 进行中（闭环已就绪）
+- **书架闭环 ✅**：SAF 选书 → 自建 `EpubParser` 解析 → 交 foliate-js 渲染。
   - **SAF 选书 → 私有化落盘 ✅**：`BookImporter` 导入时把 epub 拷贝进 `filesDir/books/`，`Book.filePath` 存本地副本路径（Room v1→v2 迁移 `sourceUri`→`filePath`，清理失效旧行）。书一经导入即应用持有，彻底脱离 SAF content:// 授权生命周期（真机验证重启后仍可读）。
   - **`WebViewAssetLoader` 请求拦截修正 ✅**：`/book/` handler 收到的 `path` 无前导斜杠（`current.epub`），修正判断后书籍字节成功送达 foliate-js，「空白屏幕」根治。assets 静态资源经 https 虚拟域正常加载。
 - **内置文件日志模块 ✅**：`FileLogger` 落盘 `filesDir/logs/`，仅 DEBUG 构建启用，按天分文件、超 1MB 轮转、单条 ≤4KB；覆盖 WebView 请求拦截/错误、foliate-js `EPUBBridge.log`、console。绕开 vivo/OPPO 平板不可关闭的系统 logcat 限流（`run-as` 可读）。
-- **M1 · 进度存读恢复 ✅**：reading_states 新增 `locator` 列（foliate `lastLocation` JSON，DB v2→v3 迁移）。每次 relocate 由 JS `EPUBBridge.onLocation` 上报整份 locator 落库（`chapter`=section.current、`progress`=全书 fraction 供轻量展示）；重开时 ReaderActivity 同步预载 locator，经 `EPUBBridge.getSavedLocator` 回传 `init({ lastLocation })` 精确定位。真机验证 `settled fraction == saved fraction`（如 0.0332=0.0332）精确恢复。
+- **进度存读恢复 ✅**：reading_states 新增 `locator` 列（foliate `lastLocation` JSON，DB v2→v3 迁移）。每次 relocate 由 JS `EPUBBridge.onLocation` 上报整份 locator 落库（`chapter`=section.current、`progress`=全书 fraction 供轻量展示）；重开时 ReaderActivity 同步预载 locator，经 `EPUBBridge.getSavedLocator` 回传 `init({ lastLocation })` 精确定位。真机验证 `settled fraction == saved fraction`（如 0.0332=0.0332）精确恢复。
   - **退出路径修复 ✅**：原「恢复前进一页」根因是无返回按钮、系统手势返回被吞成翻页污染了保存值。新增顶部「‹ 书架」按钮（`EPUBBridge.back() → finish()`），`#btn-back` 单独 `pointer-events:auto`（`#bars` 为穿透）；系统返回键统一为 `finish()` 退出，翻页只走三区点击。
-- **M1 · 章号显示修复 ✅**：relocate 改用 `lastLocation.section.current`（此前取 `e.detail.index` 为 undefined）。
+- **章号显示修复 ✅**：relocate 改用 `lastLocation.section.current`（此前取 `e.detail.index` 为 undefined）。
 
-### 待办（M1 进行）
+### 待办
 - ~~一屏一页翻页：左右点击已可用，滑动翻页默认开启~~ ✅ **滑动翻页完成**：走 foliate 原生两页分栏滚动——拖动 `renderer.scrollBy` 实时露出相邻列（两页同屏），松手 `next()/prev()` 提交、`animated` 属性平滑滑动；三区点击翻页保留，滑动方向已修正（左滑下一页/右滑上一页）。
 - **翻页动画开关 ✅记TODO**：滑动是翻页动画之一，需要一个后台开关控制「滑动/无」动画，**暂不实现**，先默认滑动 <code>reader.html</code> 内 TODO(settings)。
 - **打开应用自动打开当前书 ✅记TODO**：需要一个「启动时自动打开上次阅读的书」开关，**暂不实施**（当前仍从书架点开）。
 - ~~目录导航（TOC 面板）。~~ ✅ **已完成**：目录树渲染（多级/缩进）、点击跳转 `goTo`、当前章高亮、遮罩/✕ 关闭。
 - **页码显示 ✅记TODO**：分栏 paginated 模式下计算当前页/总页码并显示在工具栏中，**暂不实现**（推进至后续），需先确定 span/页计数方案。
-- **设置面板 ✅（M1 完成）**：右侧抽屉 + HTML 单页面板 + 多级下钻页面栈。底部工具行 ⚙ 打开，与目录抽屉互斥；顶层平铺所有设置项（字号/行距/页边距/字体/阅读背景 + 翻页动画/自动续读/页码开关），可下钻项带 ›、二级页 ‹ 返回/✕ 关闭；内容超高时列表内滚动。现有设置项均暂全局生效，全局/按书作用域区分**待定**。
+- **设置面板 ✅（已完成）**：右侧抽屉 + HTML 单页面板 + 多级下钻页面栈。底部工具行 ⚙ 打开，与目录抽屉互斥；顶层平铺所有设置项（字号/行距/页边距/字体/阅读背景 + 翻页动画/自动续读/页码开关），可下钻项带 ›、二级页 ‹ 返回/✕ 关闭；内容超高时列表内滚动。现有设置项均暂全局生效，全局/按书作用域区分**待定**。
   - **数据层接通 ✅**：`ReaderSettings`/`ReaderSettingsStore` 双套机制（默认套内置常量 + 用户套 `filesDir/settings/reader.json`，原子写、一键重置删用户套回默认套）；`EPUBBridge.getSettings/saveSettings/resetSettings` 实现 JS↔Kotlin 双向同步。
   - **控件交互 ✅**：字号/行距用「− 滑块 +」细则；页边距/主题/字体用选项（chip/网格）选择，改动即注入 `renderer.setStyles(buildReadingCSS())` 实时生效并回写持久化；字体五分类（正/题/码/粗/斜）各下钻独立选择页（内置宋/黑/楷/苹方/等线 + 跟随原书，`跟随原书样式` 总开关下不注入字号行距字体）。
   - **启动加载 ✅**：书打开后从后端 `getSettings()` 读取已存用户设置并应用，重开保留（此前只改不回读）。
@@ -90,7 +91,7 @@
   - `传统模式`（traditional）：首行缩进两字符，无段间距。**正文采用衬线字体（已确认并落地，`body, p { font-family: serif; }`）**。
   - 主题用列表单选，原书也作为一个选项（见②）。预留模板扩展位（段首放大等）。
 - [x] **② 主题选择列表 UI ✅（已实现 + 真机验证）**：设置面板「排版主题」列表单选（现代/传统/原书），每行一个、内容居中、选中高亮。切换即 `applySettings(true)` 注入对应主题 css（`buildReadingCSS` 内置于字体规则之前作默认层）实时生效 + `saveSettings` 持久化（`settings.layoutTheme`，默认 `original`）。已真机验证三类主题切换/往返持久化正常。
-- [ > ] **③ 界面控件常驻层（下一步工作）**：字号滑块(根 em)/行距/边距，跨主题保持；日夜整套配色切换 + 单独覆盖背景色。
+- [ ] **③ 界面控件常驻层（下一步工作）**：字号滑块(根 em)/行距/边距，跨主题保持；日夜整套配色切换 + 单独覆盖背景色。
 - [ ] **④ 逐条输入（手写选择器）**：左选择题器(h1/p/code/strong/em…) × 右选属性(font-family/line-height…) + 输入值，列表管理，后者覆盖前者；`font-family` 特判为字体选择器。
 - [ ] **⑤ 替换字体**：并入逐条层（`原书字体名→可用字体` 特例），只在选「原书」时生效。
 - [ ] **⑥ 废弃迁移**：移除「中英分离 + unicode-range + 五分类双字体」旧实现，设置数据迁移到新主题体系。
@@ -119,7 +120,7 @@ css模板      现代 / 传统 /（模板 css）
 三场景统一用「列表选择」表达——**原书设置也作为一个主题选项**，不用开关，全部走列表单选。
 
 #### 整体样式控制（三层 + 背景）
-- **场景一“原书设置”**：使用此字。App 内置**衬线、非衬线、等宽**三种替换字体，做缺字体兜底。
+- **场景一“原书设置”**：App 内置**衬线、非衬线、等宽**三种替换字体，做缺字体兜底。
 - **场景二“排版主题”**（列表单选）：
   - 现代模式：无首行缩进，段落靠段间距区隔。
   - 传统模式：首行缩进两字符，无段间距。
