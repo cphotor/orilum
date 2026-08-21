@@ -1057,23 +1057,31 @@ const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
     valEl.textContent = fmt ? fmt(v) : v
     onInput?.(v)
   })
+  // sync(v)：外部在打开页面时用当前保存值重设滑块位置与数值。
+  // settings 为异步加载，页内控件在模块加载期仅拿到默认值，需在进入页面时对齐真实保存值。
+  div.sync = setVal
   return div
 }
 
 // ── M2 下钻二级页（真实控件，改动即生效并回写）──
 // 字号页：0..100 相对默认档位（50 = 默认 1.0，整书按根 em 等比缩放）
 const fontSizePage = settingsPage('字号', el => {
-  el.append(sliderRow('字号大小', {
+  const row = sliderRow('字号大小', {
     min: 0, max: 100, step: 1, val: settings.fontScale, fmt: v => fontRatioLabel(v),
     onInput: v => { settings.fontScale = v; applySettings(true); refreshValueLabels() },
-  }))
+  })
+  // 打开页面时按当前保存值对齐滑块（settings 异步加载，建页期拿到的是默认值）
+  el.onEnter = () => row.sync?.(settings.fontScale)
+  el.append(row)
 })
 // 行距页
 const lineSpacingPage = settingsPage('行距', el => {
-  el.append(sliderRow('行距', {
+  const row = sliderRow('行距', {
     min: 1.0, max: 2.5, step: 0.1, val: settings.lineSpacing, fmt: v => `×${Number(v).toFixed(1)}`,
     onInput: v => { settings.lineSpacing = v; applySettings(true); refreshValueLabels() },
-  }))
+  })
+  el.onEnter = () => row.sync?.(settings.lineSpacing)
+  el.append(row)
 })
 // 页边距页：上下左右四方向独立滑块 + 数值，实时生效
 const marginPage = settingsPage('页边距', el => {
@@ -1081,10 +1089,18 @@ const marginPage = settingsPage('页边距', el => {
     min, max, step: 1, val: settings[key], fmt: v => Math.round(v) + 'px',
     onInput: v => { settings[key] = Math.round(v); applySettings(true); refreshValueLabels() },
   }))
-  mk('上边距', 'marginTop', 0, 120)
-  mk('下边距', 'marginBottom', 0, 120)
+  mk('上边距', 'marginTop', 0, 200)
+  mk('下边距', 'marginBottom', 0, 200)
   mk('左边距', 'marginLeft', 0, 200)
   mk('右边距', 'marginRight', 0, 200)
+  // 打开页面时按当前保存值对齐四个滑块
+  el.onEnter = () => el.querySelectorAll('input[type="range"]').forEach((inp, i) => {
+    const keys = ['marginTop', 'marginBottom', 'marginLeft', 'marginRight']
+    const v = settings[keys[i]]
+    inp.value = v
+    const valEl = inp.closest('.slider-controls').querySelector('.slider-val')
+    if (valEl) valEl.textContent = Math.round(v) + 'px'
+  })
 })
 // 通用取色器：RGB / HSL 双模式滑条 + RGB 输入（hex / 十进制）。
 // initialHex: 打开时的当前色（6 位 hex，可含 #）；onChange(hex6): 颜色变化时回调（含 #，含用户拖动/输入）。
