@@ -129,6 +129,8 @@ val fetchFoliateJs by tasks.registering(Copy::class) {
     outputs.dir(outputDir)
     inputs.property("version", FOLIATE_JS_VERSION)
     from(tarTree(resources.gzip(foliateJsTarball))) {
+        // paginator.js 已做本地定制（四向独立页边距），必须排除，避免被官方包覆盖。
+        exclude("**/paginator.js")
         include("package/**/*.js")
         eachFile {
             // tar 顶层是 package/；去掉前缀，落到 assets/foliate-js/

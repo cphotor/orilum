@@ -35,6 +35,7 @@
 - **进度存读恢复 ✅**：reading_states 新增 `locator` 列（foliate `lastLocation` JSON，DB v2→v3 迁移）。每次 relocate 由 JS `EPUBBridge.onLocation` 上报整份 locator 落库（`chapter`=section.current、`progress`=全书 fraction 供轻量展示）；重开时 ReaderActivity 同步预载 locator，经 `EPUBBridge.getSavedLocator` 回传 `init({ lastLocation })` 精确定位。真机验证 `settled fraction == saved fraction`（如 0.0332=0.0332）精确恢复。
   - **退出路径修复 ✅**：原「恢复前进一页」根因是无返回按钮、系统手势返回被吞成翻页污染了保存值。新增顶部「‹ 书架」按钮（`EPUBBridge.back() → finish()`），`#btn-back` 单独 `pointer-events:auto`（`#bars` 为穿透）；系统返回键统一为 `finish()` 退出，翻页只走三区点击。
 - **章号显示修复 ✅**：relocate 改用 `lastLocation.section.current`（此前取 `e.detail.index` 为 undefined）。
+- **四向独立页边距 + 全屏翻页动画（无漂移）✅（本次完成）**：页边距由「紧凑/常规/宽松预设」改为 **上下左右四滑块 + 数值**（`ReaderSettings.marginTop/Bottom/Left/Right`，px，旧 `margin` 预设自动迁移）。实现关键在 `foliate-js/paginator.js` 的 `columnize` 水平分支：把左右边距折叠进列间 gap（列宽 = `size−l−r`、列 gap = `l+r`，推进 = `size`，与滚动步长严格一致），根治「增加右边距会把下一页内容拉进当前屏、越翻越严重」的列推进漂移；同时保留整屏滑动动画（上下边距作每列内边距逐页生效）。`build.gradle.kts` 排除官方 `paginator.js` 覆盖以保留本地定制；`paginator.js` 已 force-add 纳入版本控制。<br>真机验证：四向独立可调、互不影响，翻页不漂移，动画整屏。
 
 ### 待办
 - ~~一屏一页翻页：左右点击已可用，滑动翻页默认开启~~ ✅ **滑动翻页完成**：走 foliate 原生两页分栏滚动——拖动 `renderer.scrollBy` 实时露出相邻列（两页同屏），松手 `next()/prev()` 提交、`animated` 属性平滑滑动；三区点击翻页保留，滑动方向已修正（左滑下一页/右滑上一页）。

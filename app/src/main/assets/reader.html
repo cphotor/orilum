@@ -42,9 +42,11 @@
   #view {
     position: absolute;
     inset: 0;
+    box-sizing: border-box;
     width: 100%;
     height: 100%;
     display: block;
+    padding: 24px 32px;
   }
   /* 三区点击：左=上一页，右=下一页，中=切换工具栏 */
   .zone {
@@ -723,7 +725,9 @@ const defaultSettings = {
   scheme: 'day',                // 日夜整套配色：day | night
   bgOverride: '',               // 独立覆盖背景色 hex；'' = 跟随 scheme 默认背景
   fgOverride: '',               // 独立覆盖正文字色 hex；'' = 跟随 scheme 默认文字色
-  lineSpacing: 1.6, margin: 'normal',
+  lineSpacing: 1.6,
+  // 页边距：上下左右各方向独立（px），四方向控件实时刷新
+  marginTop: 24, marginBottom: 24, marginLeft: 32, marginRight: 32,
   fontBody: '', fontTitle: '', fontCode: '', fontBold: '', fontItalic: '',
   // 中英分离开关 + 每分类的中文字体（分离开启时才使用，负责 CJK 区段）
   useCjkFont: false,
@@ -765,8 +769,6 @@ const FG_PRESETS = [
 ]
 /** 实际生效的正文字色：夜间优先（夜间用整套浅色文字），白天才用独立覆盖色(fgOverride)。 */
 const effectiveFg = () => settings.scheme === 'night' ? scheme().text : (settings.fgOverride || scheme().text)
-/** 页边距预设 -> iframe max-inline-size（控制行宽），单位 em */
-const MARGINS = { compact: '60em', normal: '720px', wide: '900px' }
 
 /**
  * 排版主题预设：key -> { label, css }
@@ -798,8 +800,10 @@ h1,h2,h3,h4,h5,h6 { font-family: sans-serif; margin-block: 1.1em 0.35em; }
 }
 const layoutThemeLabel = key => LAYOUT_THEMES[key]?.label ?? '原书设置'
 
-// 显示用标签（须在 marginPage/bgOverridePage 等页面构建前定义，否则模块加载触发 TDZ）
-const MARGIN_LABELS = { compact: '紧凑', normal: '常规', wide: '宽松' }
+// 显示用标签（须在 marginPage 等页面构建前定义，否则模块加载触发 TDZ）
+/** 页边距取值标签：上/下/左/右各 px，显示在可下钻行与滑块右侧。 */
+const marginValueLabel = () =>
+  `上:${settings.marginTop} 下:${settings.marginBottom} 左:${settings.marginLeft} 右:${settings.marginRight}`
 /** 字号：根锚=正文 BASE_BODY_PX。0..100 分段映射（0..50→0.5..1.0，50..100→1.0..2.0），50=默认 1.0。
  *  全书字号 = 正文 × 各元素自身 em 比例，根一变 → 整体等比缩放，不丢各自基准。 */
 const BASE_BODY_PX = 18
@@ -838,13 +842,17 @@ reloadFonts()
 
 // 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体五分类映射
 const buildReadingCSS = () => {
-  const { lineSpacing, margin, useOriginalStyle, layoutTheme,
-    fontBody, fontTitle, fontCode, fontBold, fontItalic } = settings
+  const { lineSpacing, useOriginalStyle, layoutTheme,
+    fontBody, fontTitle, fontCode, fontBold, fontItalic,
+    marginTop, marginBottom, marginLeft, marginRight } = settings
   const bodyBg = effectiveBg()
   const textColor = effectiveFg()
   const css = []
-  // 行宽（页边距）：作用于正文容器；672px 在平板视口内形成可靠的单列分栏
-  if (margin) css.push(`html, body { max-inline-size: ${MARGINS[margin] || MARGINS.normal}; margin-inline: auto; }`)
+  // 复位原书 html/body 自带 margin/padding，避免四周残留不明留白（页边距由 foliate 网格四向变量精确控制）。
+  css.push(`html, body { margin: 0 !important; padding: 0 !important; }`)
+  // 允许段内跨列断行：默认 orphans/widows 均为 2，两行段落若只剩 1 行能放下会整段搬到下一页。
+  // 置为 1 后允许单行碎片留存于分栏边界，实现真正的段内分页（与书内 css 的 break-inside 无关）。
+  css.push(`p, li, blockquote, div, h1, h2, h3, h4, h5, h6 { orphans: 1; widows: 1; }`)
   // 日夜整套配色：背景 + 正文字色同注入，避免「只切背景不切文字 → 夜黑字黑」
   css.push(`html { background: ${bodyBg}; color: ${textColor}; }`)
   css.push(`body { background: ${bodyBg}; color: ${textColor}; }`)
@@ -898,7 +906,22 @@ const buildReadingCSS = () => {
 // 把当前 settings 应用到渲染（注入 iframe CSS + 面板/阅读器外观）
 const applySettings = (persist = true) => {
   const r = view.renderer
+  const { marginTop, marginBottom, marginLeft, marginRight } = settings
   if (r && r.setStyles) r.setStyles(buildReadingCSS())
+  // 页边距：四向由 foliate #top 网格独立控制（setPageMargins 逐边注入 px）。
+  //  - 上/下/左/右 = 网格外围四条轨道，每条可单独调节，互不影响；
+  //  - gap：仅作相邻两页（对开）之间的固定 gutter，避免两页粘连；
+  //  - margin：关闭 foliate 对称的 --_margin（置零），统一交给四向变量。
+  // 不要给 #view 加 padding：那会缩小可翻页视口，导致滑动只在内框范围生效、四周变死区。
+  view.style.padding = '0'
+  if (r) {
+    const gutterPx = 24 // 固定列间 gutter（唯一对称量），左右页外边距由 setPageMargins 各自独立设置
+    const w = document.documentElement.clientWidth || 800
+    const gapPct = (gutterPx / w * 100).toFixed(2)
+    r.setAttribute?.('gap', `${gapPct}%`)
+    r.setAttribute?.('margin', '0')
+    r.setPageMargins?.({ top: marginTop, right: marginRight, bottom: marginBottom, left: marginLeft })
+  }
   // 翻页动画
   if (r) {
     if (settings.pageAnim) r.setAttribute?.('animated', '')
@@ -1035,30 +1058,6 @@ const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
   return div
 }
 
-// 选项 chips（页边距/主题的选择行）
-const chipRow = (label, choices, current, onPick) => {
-  const div = document.createElement('div')
-  div.className = 'set-row'
-  div.innerHTML = `<span class="set-label">${label}</span><span class="slider-val">${current}</span>`
-  const chips = document.createElement('div')
-  chips.className = 'opt-chips'
-  choices.forEach(c => {
-    const chip = document.createElement('button')
-    chip.type = 'button'
-    chip.className = 'opt-chip' + (c.value === current ? ' sel' : '')
-    chip.textContent = c.label
-    chip.addEventListener('click', () => {
-      chips.querySelectorAll('.opt-chip').forEach(x => x.classList.remove('sel'))
-      chip.classList.add('sel')
-      div.querySelector('.slider-val').textContent = c.label
-      onPick?.(c.value)
-    })
-    chips.append(chip)
-  })
-  div.append(chips)
-  return div
-}
-
 // ── M2 下钻二级页（真实控件，改动即生效并回写）──
 // 字号页：0..100 相对默认档位（50 = 默认 1.0，整书按根 em 等比缩放）
 const fontSizePage = settingsPage('字号', el => {
@@ -1074,13 +1073,16 @@ const lineSpacingPage = settingsPage('行距', el => {
     onInput: v => { settings.lineSpacing = v; applySettings(true); refreshValueLabels() },
   }))
 })
-// 页边距页
+// 页边距页：上下左右四方向独立滑块 + 数值，实时生效
 const marginPage = settingsPage('页边距', el => {
-  el.append(chipRow('行宽', [
-    { value: 'compact', label: '紧凑' },
-    { value: 'normal', label: '常规' },
-    { value: 'wide', label: '宽松' },
-  ], settings.margin, v => { settings.margin = v; applySettings(true); refreshValueLabels() }))
+  const mk = (label, key, min, max) => el.append(sliderRow(label, {
+    min, max, step: 1, val: settings[key], fmt: v => Math.round(v) + 'px',
+    onInput: v => { settings[key] = Math.round(v); applySettings(true); refreshValueLabels() },
+  }))
+  mk('上边距', 'marginTop', 0, 120)
+  mk('下边距', 'marginBottom', 0, 120)
+  mk('左边距', 'marginLeft', 0, 200)
+  mk('右边距', 'marginRight', 0, 200)
 })
 // 通用取色器：RGB / HSL 双模式滑条 + RGB 输入（hex / 十进制）。
 // initialHex: 打开时的当前色（6 位 hex，可含 #）；onChange(hex6): 颜色变化时回调（含 #，含用户拖动/输入）。
@@ -1531,7 +1533,7 @@ const refreshValueLabels = () => {
   const v = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
   v('v-font-size', fontRatioLabel(settings.fontScale))
   v('v-line-spacing', `×${Number(settings.lineSpacing).toFixed(1)}`)
-  v('v-margin', MARGIN_LABELS[settings.margin] ?? '常规')
+  v('v-margin', marginValueLabel())
   // 字体色/背景色顶层用色块方框显示当前实际颜色（夜间优先后的生效值）
   const swatch = (id, color) => { const el = document.getElementById(id); if (el) el.style.background = color }
   swatch('v-bg', effectiveBg())
@@ -1552,7 +1554,7 @@ const refreshValueLabels = () => {
 const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
   el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
-  el.append(settingsRow('页边距', { valId: 'v-margin', value: MARGIN_LABELS[settings.margin] ?? '常规', onTap: () => pushSettingsPage(marginPage, '页边距') }))
+  el.append(settingsRow('页边距', { valId: 'v-margin', value: marginValueLabel(), onTap: () => pushSettingsPage(marginPage, '页边距') }))
   el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
   el.append(settingsRow('字体色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '字体色') }))

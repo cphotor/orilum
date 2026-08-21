@@ -28,7 +28,7 @@ class ReaderSettingsTest {
             theme = "dark",
             fontSize = 22,
             lineSpacing = 2.0,
-            margin = "wide",
+            marginTop = 40, marginBottom = 40, marginLeft = 48, marginRight = 48,
             fontBody = "Songti",
             fontTitle = "Heiti",
             fontCode = "Monaco",
@@ -76,7 +76,8 @@ class ReaderSettingsTest {
     fun `json output contains all keys`() {
         val obj = ReaderSettings.DEFAULT.toJsonObject()
         listOf(
-            "theme", "fontSize", "lineSpacing", "margin",
+            "theme", "fontSize", "lineSpacing",
+            "marginTop", "marginBottom", "marginLeft", "marginRight",
             "fontBody", "fontTitle", "fontCode", "fontBold", "fontItalic",
             "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum",
             "fontScale", "scheme", "bgOverride", "fgOverride", "layoutTheme",
@@ -119,6 +120,24 @@ class ReaderSettingsTest {
         val explicit = ReaderSettings.fromJson("""{"theme":"white","scheme":"night","bgOverride":"#112233"}""")
         assertEquals("night", explicit.scheme)
         assertEquals("#112233", explicit.bgOverride)
+    }
+
+    @Test
+    fun `legacy margin preset migrates to per-side px`() {
+        // 旧 margin=compact → 四方向边距放大（内容行宽变窄）
+        val compact = ReaderSettings.fromJson("""{"margin":"compact"}""")
+        assertEquals(40, compact.marginTop)
+        assertEquals(48, compact.marginLeft)
+        assertEquals(48, compact.marginRight)
+        // 旧 margin=wide → 边距收小
+        val wide = ReaderSettings.fromJson("""{"margin":"wide"}""")
+        assertEquals(16, wide.marginTop)
+        assertEquals(16, wide.marginLeft)
+        // 新独立字段优先，忽略旧 margin 预设
+        val explicit = ReaderSettings.fromJson("""{"margin":"compact","marginTop":10,"marginLeft":20}""")
+        assertEquals(10, explicit.marginTop)
+        assertEquals(20, explicit.marginLeft)
+        assertEquals(32, explicit.marginRight) // 未提供方向回退默认
     }
 
     @Test

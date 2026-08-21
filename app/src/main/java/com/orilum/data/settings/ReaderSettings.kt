@@ -24,8 +24,11 @@ data class ReaderSettings(
     val fontSize: Int = 18,
     /** 行距（number，1.x 倍）。 */
     val lineSpacing: Double = 1.6,
-    /** 页边距预设名（compact / normal / wide）。 */
-    val margin: String = "normal",
+    /** 页边距：上下左右四方向独立（px）。 */
+    val marginTop: Int = 24,
+    val marginBottom: Int = 24,
+    val marginLeft: Int = 32,
+    val marginRight: Int = 32,
     /** 正文/标题/代码/粗体/斜体字体；空串 = 跟随原书样式。 */
     val fontBody: String = "",
     val fontTitle: String = "",
@@ -62,7 +65,10 @@ data class ReaderSettings(
         put("theme", theme)
         put("fontSize", fontSize)
         put("lineSpacing", lineSpacing)
-        put("margin", margin)
+        put("marginTop", marginTop)
+        put("marginBottom", marginBottom)
+        put("marginLeft", marginLeft)
+        put("marginRight", marginRight)
         put("fontBody", fontBody)
         put("fontTitle", fontTitle)
         put("fontCode", fontCode)
@@ -142,11 +148,25 @@ data class ReaderSettings(
                     legacyTheme == "sepia" -> "#f4f2ec"
                     else -> d.bgOverride
                 }
+                // 旧套装迁移：旧 margin(compact/normal/wide) 行宽预设 → 新的上下左右独立 px（紧凑=边距大、宽松=边距小）
+                val hasMargin = o.has("marginTop") || o.has("marginBottom") || o.has("marginLeft") || o.has("marginRight")
+                val legacyMargin = o.optString("margin", "")
+                val marginTop = if (hasMargin) o.optInt("marginTop", d.marginTop)
+                else when (legacyMargin) { "compact" -> 40; "wide" -> 16; else -> d.marginTop }
+                val marginBottom = if (hasMargin) o.optInt("marginBottom", d.marginBottom)
+                else when (legacyMargin) { "compact" -> 40; "wide" -> 16; else -> d.marginBottom }
+                val marginLeft = if (hasMargin) o.optInt("marginLeft", d.marginLeft)
+                else when (legacyMargin) { "compact" -> 48; "wide" -> 16; else -> d.marginLeft }
+                val marginRight = if (hasMargin) o.optInt("marginRight", d.marginRight)
+                else when (legacyMargin) { "compact" -> 48; "wide" -> 16; else -> d.marginRight }
                 ReaderSettings(
                     theme = o.optString("theme", d.theme),
                     fontSize = o.optInt("fontSize", d.fontSize),
                     lineSpacing = o.optDouble("lineSpacing", d.lineSpacing),
-                    margin = o.optString("margin", d.margin),
+                    marginTop = marginTop,
+                    marginBottom = marginBottom,
+                    marginLeft = marginLeft,
+                    marginRight = marginRight,
                     fontBody = o.optString("fontBody", d.fontBody),
                     fontTitle = o.optString("fontTitle", d.fontTitle),
                     fontCode = o.optString("fontCode", d.fontCode),
