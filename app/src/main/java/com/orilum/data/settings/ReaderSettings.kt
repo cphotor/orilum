@@ -48,6 +48,8 @@ data class ReaderSettings(
     val scheme: String = "day",
     /** 【样式系统】独立覆盖背景色（hex 如 "#f4f2ec"）；空串 = 跟随 [scheme] 默认背景。 */
     val bgOverride: String = "",
+    /** 【样式系统】独立覆盖正文字色（hex 如 "#2b2b2b"）；空串 = 跟随 [scheme] 默认文字色。 */
+    val fgOverride: String = "",
     /** 【样式系统】排版主题：original（原书设置）| modern（现代）| traditional（传统）。 */
     val layoutTheme: String = "original",
 ) {
@@ -74,6 +76,7 @@ data class ReaderSettings(
         put("fontScale", fontScale)
         put("scheme", scheme)
         put("bgOverride", bgOverride)
+        put("fgOverride", fgOverride)
         put("layoutTheme", layoutTheme)
     }
 
@@ -157,6 +160,7 @@ data class ReaderSettings(
                     fontScale = fontScale,
                     scheme = scheme,
                     bgOverride = bgOverride,
+                    fgOverride = o.optString("fgOverride", d.fgOverride),
                     layoutTheme = o.optString("layoutTheme", d.layoutTheme),
                 )
             } catch (_: Exception) {

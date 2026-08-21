@@ -79,7 +79,7 @@ class ReaderSettingsTest {
             "theme", "fontSize", "lineSpacing", "margin",
             "fontBody", "fontTitle", "fontCode", "fontBold", "fontItalic",
             "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum",
-            "fontScale", "scheme", "bgOverride", "layoutTheme",
+            "fontScale", "scheme", "bgOverride", "fgOverride", "layoutTheme",
         ).forEach { assertTrue("missing key $it", obj.has(it)) }
         assertNotNull(obj.keys())
         assertFalse(ReaderSettings.DEFAULT.useOriginalStyle)
@@ -127,6 +127,7 @@ class ReaderSettingsTest {
             fontScale = 72.0,
             scheme = "night",
             bgOverride = "#123456",
+            fgOverride = "#abcdef",
             layoutTheme = "traditional",
         )
         assertEquals(custom, ReaderSettings.fromJson(custom.toJson()))
