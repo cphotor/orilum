@@ -853,9 +853,11 @@ const buildReadingCSS = () => {
   // 允许段内跨列断行：默认 orphans/widows 均为 2，两行段落若只剩 1 行能放下会整段搬到下一页。
   // 置为 1 后允许单行碎片留存于分栏边界，实现真正的段内分页（与书内 css 的 break-inside 无关）。
   css.push(`p, li, blockquote, div, h1, h2, h3, h4, h5, h6 { orphans: 1; widows: 1; }`)
-  // 日夜整套配色：背景 + 正文字色同注入，避免「只切背景不切文字 → 夜黑字黑」
-  css.push(`html { background: ${bodyBg}; color: ${textColor}; }`)
-  css.push(`body { background: ${bodyBg}; color: ${textColor}; }`)
+  // 日夜整套配色：背景 + 正文字色同注入，避免「只切背景不切文字 → 夜黑字黑」。
+  // !important 防止被书内更高优先级的背景规则覆盖；--theme-bg-color 供 foliate 分页器把内部
+  // #background 纸面色（默认取原书白色背景）同步染色，杜绝「夜间模式左右页边距透出白底」。
+  css.push(`html { background: ${bodyBg} !important; color: ${textColor} !important; --theme-bg-color: ${bodyBg}; }`)
+  css.push(`body { background: ${bodyBg} !important; color: ${textColor} !important; }`)
   // 排版数值：根 em 字号（相对默认档位）+ 行距；useOriginalStyle 开则不改字号/行距（仅跟随原书）
   if (!useOriginalStyle) {
     const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
