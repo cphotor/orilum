@@ -79,8 +79,56 @@ class ReaderSettingsTest {
             "theme", "fontSize", "lineSpacing", "margin",
             "fontBody", "fontTitle", "fontCode", "fontBold", "fontItalic",
             "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum",
+            "fontScale", "scheme", "bgOverride", "layoutTheme",
         ).forEach { assertTrue("missing key $it", obj.has(it)) }
         assertNotNull(obj.keys())
         assertFalse(ReaderSettings.DEFAULT.useOriginalStyle)
+    }
+
+    // ── 样式系统 · 字号相对档位映射 ─────────────────────────
+    @Test
+    fun `font scale midpoint is identity`() {
+        assertEquals(1.0, ReaderSettings.fontScaleToRatio(50.0), 1e-9)
+        assertEquals(0.5, ReaderSettings.fontScaleToRatio(0.0), 1e-9)
+        assertEquals(2.0, ReaderSettings.fontScaleToRatio(100.0), 1e-9)
+        // 反向：1.0 ↔ 50
+        assertEquals(50.0, ReaderSettings.ratioToFontScale(1.0), 1e-9)
+    }
+
+    @Test
+    fun `legacy absolute fontsize migrates to scale`() {
+        // 旧套只有 fontSize=18(默认) → 迁移为 50（默认档位）
+        val defaultMigrated = ReaderSettings.fromJson("""{"fontSize":18}""")
+        assertEquals(50.0, defaultMigrated.fontScale, 1e-9)
+        // 旧套 fontSize=36（2 倍）→ 迁移为 100
+        val doubleMigrated = ReaderSettings.fromJson("""{"fontSize":36}""")
+        assertEquals(100.0, doubleMigrated.fontScale, 1e-9)
+    }
+
+    @Test
+    fun `legacy theme migrates to scheme and bg override`() {
+        // 旧 theme=dark(暗夜) → 整套夜间配色
+        val dark = ReaderSettings.fromJson("""{"theme":"dark"}""")
+        assertEquals("night", dark.scheme)
+        assertEquals("", dark.bgOverride)
+        // 旧 theme=sepia(羊皮纸) → 白天配色 + 背景覆盖色
+        val sepia = ReaderSettings.fromJson("""{"theme":"sepia"}""")
+        assertEquals("day", sepia.scheme)
+        assertEquals("#f4f2ec", sepia.bgOverride)
+        // 新体系字段优先，不再被旧 theme 覆盖
+        val explicit = ReaderSettings.fromJson("""{"theme":"white","scheme":"night","bgOverride":"#112233"}""")
+        assertEquals("night", explicit.scheme)
+        assertEquals("#112233", explicit.bgOverride)
+    }
+
+    @Test
+    fun `new style fields round-trip`() {
+        val custom = ReaderSettings(
+            fontScale = 72.0,
+            scheme = "night",
+            bgOverride = "#123456",
+            layoutTheme = "traditional",
+        )
+        assertEquals(custom, ReaderSettings.fromJson(custom.toJson()))
     }
 }

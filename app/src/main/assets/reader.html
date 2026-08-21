@@ -16,6 +16,29 @@
     user-select: none;
     touch-action: pan-y;
   }
+
+  /* 日夜整套配色：驱动工具栏/抽屉面板/控件等「界面常驻层」换肤。
+     body[data-scheme] 由 applySettings 依 settings.scheme 设置。 */
+  body[data-scheme="day"] {
+    --ui-bg: #faf8f4; --ui-text: #2b2b2b;
+    --ui-border: #ece9e2; --ui-border-soft: #f0ede6;
+    --ui-row-active: #efece4; --ui-card-bg: #ffffff; --ui-card-border: #e3dfd5;
+    --ui-muted: #999; --ui-muted2: #888; --ui-chevron: #bbb;
+    --ui-switch-track: #c9c4ba;
+    --ui-sel-bg: #faf3e6; --ui-sel-text: #8a5f1f; --ui-sel-border: #c8a15a;
+    --ui-chip-text: #555; --ui-slider-btn: #f0ede6; --ui-slider-btn-active: #e1dccf;
+    --ui-slab: rgba(0, 0, 0, 0.08);
+  }
+  body[data-scheme="night"] {
+    --ui-bg: #1c1c1e; --ui-text: #e8e8e8;
+    --ui-border: #2c2c2e; --ui-border-soft: #2a2a2c;
+    --ui-row-active: #262628; --ui-card-bg: #232326; --ui-card-border: #343438;
+    --ui-muted: #8a8a8a; --ui-muted2: #909090; --ui-chevron: #666;
+    --ui-switch-track: #4a4a4e;
+    --ui-sel-bg: #2a2018; --ui-sel-text: #d9a94f; --ui-sel-border: #8a5f1f;
+    --ui-chip-text: #c9c9c9; --ui-slider-btn: #2c2c2e; --ui-slider-btn-active: #38383c;
+    --ui-slab: rgba(255, 255, 255, 0.10);
+  }
   #view {
     position: absolute;
     inset: 0;
@@ -171,8 +194,8 @@
     position: absolute;
     top: 0; left: 0; bottom: 0;
     width: min(360px, 85vw);
-    background: #faf8f4;
-    color: #2b2b2b;
+    background: var(--ui-bg);
+    color: var(--ui-text);
     display: flex;
     flex-direction: column;
     box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
@@ -186,7 +209,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid #ece9e2;
+    border-bottom: 1px solid var(--ui-border);
     font-size: 16px;
     font-weight: 600;
     flex-shrink: 0;
@@ -214,14 +237,14 @@
     display: flex;
     align-items: center;
     padding: 12px 16px 12px 36px; /* 左侧预留固定对齐槽，三角形不进入文本流 */
-    color: #333;
+    color: var(--ui-text);
     text-decoration: none;
     font-size: 15px;
-    border-bottom: 1px solid #f0ede6;
+    border-bottom: 1px solid var(--ui-border-soft);
     cursor: pointer;
   }
-  #toc-list .toc-item:active { background: #efece4; }
-  #toc-list .toc-item.current { color: #a06b1f; font-weight: 600; }
+  #toc-list .toc-item:active { background: var(--ui-row-active); }
+  #toc-list .toc-item.current { color: var(--ui-sel-text); font-weight: 600; }
   /* 展开/折叠三角形：固定在文本对齐线之外的槽位上，不参与文本对齐，因此
      有子章节与无子章节的目录文字左缘完全一致 */
   #toc-list .expander {
@@ -236,7 +259,7 @@
     justify-content: center;
     background: transparent;
     border: none;
-    color: #999;
+    color: var(--ui-muted);
     font-size: 15px;
     line-height: 1;
     cursor: pointer;
@@ -262,8 +285,8 @@
     position: absolute;
     top: 0; right: 0; bottom: 0;
     width: min(360px, 85vw);
-    background: #faf8f4;
-    color: #2b2b2b;
+    background: var(--ui-bg);
+    color: var(--ui-text);
     display: flex;
     flex-direction: column;
     box-shadow: -2px 0 12px rgba(0, 0, 0, 0.2);
@@ -277,7 +300,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid #ece9e2;
+    border-bottom: 1px solid var(--ui-border);
     font-size: 16px;
     font-weight: 600;
     flex-shrink: 0;
@@ -310,7 +333,7 @@
   .set-group-title {
     padding: 14px 16px 6px;
     font-size: 12px;
-    color: #999;
+    color: var(--ui-muted);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -321,19 +344,19 @@
     justify-content: space-between;
     padding: 14px 16px;
     min-height: 48px;
-    border-bottom: 1px solid #f0ede6;
+    border-bottom: 1px solid var(--ui-border-soft);
     font-size: 15px;
     cursor: pointer;
     box-sizing: border-box;
   }
-  .set-row:active { background: #efece4; }
+  .set-row:active { background: var(--ui-row-active); }
   .set-row .set-label { flex: 1; }
-  .set-row .set-value { color: #888; font-size: 13px; margin-right: 4px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .set-row .set-chevron { color: #bbb; font-size: 14px; }
+  .set-row .set-value { color: var(--ui-muted2); font-size: 13px; margin-right: 4px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .set-row .set-chevron { color: var(--ui-chevron); font-size: 14px; }
   /* 排版主题：列表单选、每行一行、内容居中、选中高亮 */
   .theme-opt { justify-content: center; }
-  .theme-opt .set-label { flex: 1; text-align: center; color: #666; }
-  .theme-opt.sel .set-label { color: #2b2b2b; font-weight: 600; }
+  .theme-opt .set-label { flex: 1; text-align: center; color: var(--ui-muted); }
+  .theme-opt.sel .set-label { color: var(--ui-text); font-weight: 600; }
   /* 开关 */
   .switch {
     position: relative;
@@ -344,7 +367,7 @@
   .switch .track {
     position: absolute;
     inset: 0;
-    background: #c9c4ba;
+    background: var(--ui-switch-track);
     border-radius: 12px;
     transition: background 0.2s;
   }
@@ -366,54 +389,77 @@
     width: 100%; margin-top: 10px; padding: 0 2px;
   }
   .slider-btn {
-    background: #f0ede6; border: none; border-radius: 6px;
+    background: var(--ui-slider-btn); border: none; border-radius: 6px;
     width: 34px; height: 34px; font-size: 16px; font-weight: 600;
-    color: #4a4a4a; cursor: pointer; flex-shrink: 0;
+    color: var(--ui-text); cursor: pointer; flex-shrink: 0;
   }
-  .slider-btn:active { background: #e1dccf; }
+  .slider-btn:active { background: var(--ui-slider-btn-active); }
   .slider-btn.disabled { opacity: 0.35; pointer-events: none; }
   .slider-row input[type="range"] {
     flex: 1; min-width: 0; accent-color: #c8a15a; height: 28px;
   }
-  .slider-val { font-size: 13px; color: #888; min-width: 34px; text-align: right; flex-shrink: 0; }
+  .slider-val { font-size: 13px; color: var(--ui-muted2); min-width: 34px; text-align: right; flex-shrink: 0; }
   /* 主题/预设选项（网格按钮） */
   .preset-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
     padding: 12px 16px 16px;
   }
   .preset-opt {
-    border: 1px solid #e3dfd5; border-radius: 8px; padding: 10px 6px;
-    text-align: center; font-size: 12px; color: #666; cursor: pointer;
-    background: #fff; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    border: 1px solid var(--ui-card-border); border-radius: 8px; padding: 10px 6px;
+    text-align: center; font-size: 12px; color: var(--ui-muted); cursor: pointer;
+    background: var(--ui-card-bg); display: flex; flex-direction: column; align-items: center; gap: 6px;
   }
   .preset-opt .swatch {
-    width: 100%; height: 34px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.08);
+    width: 100%; height: 34px; border-radius: 5px; border: 1px solid var(--ui-slab);
   }
-  .preset-opt.sel { border-color: #c8a15a; background: #faf3e6; color: #8a5f1f; }
+  .preset-opt.sel { border-color: var(--ui-sel-border); background: var(--ui-sel-bg); color: var(--ui-sel-text); }
   /* 页边距 + 行距预设 */
   .opt-chips { display: flex; gap: 8px; padding: 8px 16px 16px; flex-wrap: wrap; }
   .opt-chip {
-    border: 1px solid #e3dfd5; border-radius: 16px; padding: 7px 14px;
-    font-size: 13px; color: #555; cursor: pointer; background: #fff;
+    border: 1px solid var(--ui-card-border); border-radius: 16px; padding: 7px 14px;
+    font-size: 13px; color: var(--ui-chip-text); cursor: pointer; background: var(--ui-card-bg);
   }
-  .opt-chip.sel { border-color: #c8a15a; background: #faf3e6; color: #8a5f1f; }
+  .opt-chip.sel { border-color: var(--ui-sel-border); background: var(--ui-sel-bg); color: var(--ui-sel-text); }
   /* 字体选择页：分中文/英文两组，行内以字体自身字形预览 */
   .font-group-scrim { padding: 4px 0 24px; }
   .font-group-title {
-    padding: 12px 20px 6px; font-size: 12px; color: #9a9279; letter-spacing: 0.5px;
+    padding: 12px 20px 6px; font-size: 12px; color: var(--ui-muted); letter-spacing: 0.5px;
   }
   .font-row {
     display: flex; align-items: center; justify-content: space-between;
-    margin: 0 16px; padding: 13px 14px; border-bottom: 1px solid #f0ece2;
-    cursor: pointer; font-size: 17px; color: #3a3a32;
+    margin: 0 16px; padding: 13px 14px; border-bottom: 1px solid var(--ui-border-soft);
+    cursor: pointer; font-size: 17px; color: var(--ui-text);
   }
   .font-row:last-child { border-bottom: none; }
-  .font-row.sel { background: #faf3e6; }
+  .font-row.sel { background: var(--ui-sel-bg); }
   .font-sample { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .font-check { flex-shrink: 0; color: #c8a15a; font-size: 15px; margin-left: 10px; }
+  /* 背景色自定义：嵌入式调色板（色相/饱和度/明度滑条 + RGB 输入） */
+  .cp-pad { padding: 6px 16px 18px; }
+  .cp-mode { display: flex; gap: 8px; margin: 2px 0 6px; }
+  .cp-row { margin-top: 12px; }
+  .cp-label { font-size: 12px; color: var(--ui-muted); margin-bottom: 4px; }
+  /* 自绘滑块：纯 div 轨道 + 拖柄，避免原生 range 在 WebView 的残留（右侧色条），保证与下方输入行对齐 */
+  .cp-slider { position: relative; height: 26px; margin-top: 2px; touch-action: none; }
+  .cp-track {
+    position: absolute; left: 0; right: 0; top: 50%; height: 16px;
+    transform: translateY(-50%); border-radius: 8px; border: none;
+    background-size: 100% 100%; box-sizing: border-box;
+  }
+  .cp-thumb {
+    position: absolute; top: 50%; width: 26px; height: 26px; margin-left: -13px;
+    transform: translateY(-50%); border-radius: 50%; background: #fff;
+    border: 1px solid rgba(120, 120, 120, 0.5); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  }
+  .cp-input-row { display: flex; align-items: stretch; gap: 8px; margin-top: 12px; }
+  .cp-input-row input[type="text"] {
+    flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 8px 10px; font-size: 14px; font-variant: tabular-nums;
+    border: 1px solid var(--ui-card-border); border-radius: 6px; background: var(--ui-card-bg); color: var(--ui-text);
+  }
+  .cp-swatch { width: 34px; align-self: stretch; border-radius: 6px; border: 1px solid var(--ui-slab); flex-shrink: 0; }
 </style>
 </head>
-<body>
+<body data-scheme="day">
 <foliate-view id="view"></foliate-view>
 
 <div id="zone-l" class="zone"></div>
@@ -437,7 +483,7 @@
       <button class="tool" id="tool-toc" type="button"><span class="ic">☰</span><span class="lb">目录</span></button>
       <button class="tool" type="button"><span class="ic">☆</span><span class="lb">书签</span></button>
       <button class="tool" type="button"><span class="ic">✎</span><span class="lb">笔记</span></button>
-      <button class="tool" type="button"><span class="ic">☾</span><span class="lb">夜间</span></button>
+      <button class="tool" id="tool-night" type="button"><span class="ic">☾</span><span class="lb">夜间</span></button>
       <button class="tool" id="tool-settings" type="button"><span class="ic">⚙</span><span class="lb">设置</span></button>
     </div>
   </div>
@@ -638,11 +684,19 @@ $('tool-settings').addEventListener('click', e => {
   openSettings()
 })
 
-document.querySelectorAll('#tools-row .tool:not(#tool-toc):not(#tool-settings)').forEach(btn => {
+document.querySelectorAll('#tools-row .tool:not(#tool-toc):not(#tool-settings):not(#tool-night)').forEach(btn => {
   btn.addEventListener('click', e => {
     e.stopPropagation()
     toast('「' + (btn.querySelector('.lb')?.textContent ?? '') + '」功能开发中')
   })
+})
+// ☾ 夜间：一键在白天/夜间整套配色间切换
+$('tool-night').addEventListener('click', e => {
+  e.stopPropagation()
+  settings.scheme = settings.scheme === 'night' ? 'day' : 'night'
+  applySettings(true)
+  refreshValueLabels()
+  toast(schemeLabel(settings.scheme) + '模式')
 })
 $('btn-toc-close').addEventListener('click', closeTOC)
 $('toc-scrim').addEventListener('click', closeTOC)
@@ -654,7 +708,11 @@ $('toc-scrim').addEventListener('click', closeTOC)
 //   resetSettings() 一键重置回默认套并返回默认 JSON
 // 本层维护 JS 侧拷贝 settings，改动后先应用到渲染再回写，保证 UI 与生效值一致。
 const defaultSettings = {
-  theme: 'sepia', fontSize: 18, lineSpacing: 1.6, margin: 'normal',
+  theme: 'sepia', fontSize: 18, // 旧套字段（绝对px/背景名），仅兼容迁移；新版由 fontScale/scheme/bgOverride 接管
+  fontScale: 50,                // 0..100 相对默认字号档位；50 = 默认 1.0
+  scheme: 'day',                // 日夜整套配色：day | night
+  bgOverride: '',               // 独立覆盖背景色 hex；'' = 跟随 scheme 默认背景
+  lineSpacing: 1.6, margin: 'normal',
   fontBody: '', fontTitle: '', fontCode: '', fontBold: '', fontItalic: '',
   // 中英分离开关 + 每分类的中文字体（分离开启时才使用，负责 CJK 区段）
   useCjkFont: false,
@@ -669,11 +727,27 @@ let settings = { ...defaultSettings }
 const bridgeGet = (name) =>
   typeof EPUBBridge !== 'undefined' && EPUBBridge[name] ? EPUBBridge[name]() : null
 
-/** 主题预设：key -> { 阅读背景(iframe)，面板/页面背景, 文字色 } */
-const THEMES = {
-  sepia: { body: '#f4f2ec', panel: '#faf8f4', text: '#2b2b2b' },
-  white: { body: '#ffffff', panel: '#ffffff', text: '#2b2b2b' },
-  dark: { body: '#141414', panel: '#1c1c1e', text: '#e8e8e8' },
+/** 日夜整套配色：白天/夜间各是一整套（阅读背景 + 正文字色），面板/文字跟随 scheme 换肤。 */
+const SCHEMES = {
+  day:   { label: '白天', bg: '#f4f2ec', text: '#2b2b2b' },
+  night: { label: '夜间', bg: '#141414', text: '#c8cbd2' },
+}
+const scheme = () => SCHEMES[settings.scheme] || SCHEMES.day
+/** 实际生效的正文背景 = 独立覆盖色(bgOverride) 或 当前 scheme 默认背景。 */
+const effectiveBg = () => settings.bgOverride || scheme().bg
+/** 背景色覆盖预设：'' = 原书设置（动态取 scheme 默认背景），其余为固定 hex 色板（仅浅色系）。 */
+const BG_PRESETS = [
+  { value: '', label: '原书设置' },
+  { value: '#f4f2ec', label: '羊皮纸' },
+  { value: '#ffffff', label: '亮白' },
+  { value: '#e8efe4', label: '护眼绿' },
+  { value: '#dce6f2', label: '浅蓝' },
+]
+const schemeLabel = key => SCHEMES[key]?.label ?? '白天'
+const bgLabel = v => {
+  if (!v) return '原书设置'
+  const p = BG_PRESETS.find(x => x.value === v)
+  return p ? p.label : v
 }
 /** 页边距预设 -> iframe max-inline-size（控制行宽），单位 em */
 const MARGINS = { compact: '60em', normal: '720px', wide: '900px' }
@@ -708,9 +782,16 @@ h1,h2,h3,h4,h5,h6 { font-family: sans-serif; margin-block: 1.1em 0.35em; }
 }
 const layoutThemeLabel = key => LAYOUT_THEMES[key]?.label ?? '原书设置'
 
-// 显示用标签（须在 themePage/marginPage 等页面构建前定义，否则模块加载触发 TDZ）
+// 显示用标签（须在 marginPage/bgOverridePage 等页面构建前定义，否则模块加载触发 TDZ）
 const MARGIN_LABELS = { compact: '紧凑', normal: '常规', wide: '宽松' }
-const themeLabel = key => ({ sepia: '羊皮纸', white: '亮白', dark: '暗夜' }[key] ?? key)
+/** 字号：根锚=正文 BASE_BODY_PX。0..100 分段映射（0..50→0.5..1.0，50..100→1.0..2.0），50=默认 1.0。
+ *  全书字号 = 正文 × 各元素自身 em 比例，根一变 → 整体等比缩放，不丢各自基准。 */
+const BASE_BODY_PX = 18
+const fontScaleToRatio = v => {
+  const x = Math.min(100, Math.max(0, Number(v)))
+  return x <= 50 ? 0.5 + x * 0.01 : x * 0.02
+}
+const fontRatioLabel = v => Math.round(BASE_BODY_PX * fontScaleToRatio(v)) + 'px'
 // 字体池：从 Kotlin 拉取设备真实可用的字体（系统扫描 + 用户导入）。
 // 每项 {key(源文件标识，供 /fonts/{key} 加载), name(文件名去扩展名), lang(cjk|latin|generic)}；
 // 选择值用内部别名 alias 记入 settings（'' = 跟随原书），CSS 里经 @font-face url(/fonts/{key}) 实际加载源文件。
@@ -739,20 +820,22 @@ const reloadFonts = () => {
 }
 reloadFonts()
 
-// 生成注入正文的排版 CSS：字号、行距、页边距（行宽）、主题背景、字体五分类映射
+// 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体五分类映射
 const buildReadingCSS = () => {
-  const { theme, fontSize, lineSpacing, margin, useOriginalStyle, layoutTheme,
+  const { lineSpacing, margin, useOriginalStyle, layoutTheme,
     fontBody, fontTitle, fontCode, fontBold, fontItalic } = settings
-  const t = THEMES[theme] || THEMES.sepia
-  const bodyBg = t.body
+  const bodyBg = effectiveBg()
+  const textColor = scheme().text
   const css = []
   // 行宽（页边距）：作用于正文容器；672px 在平板视口内形成可靠的单列分栏
   if (margin) css.push(`html, body { max-inline-size: ${MARGINS[margin] || MARGINS.normal}; margin-inline: auto; }`)
-  // 主题背景：注入到 iframe 根元素，避免白闪
-  css.push(`html { background: ${bodyBg}; } body { background: ${bodyBg}; }`)
-  // 排版数值：字体大小 + 行距；useOriginalStyle 开则不改字号/行距（仅跟随原书）
+  // 日夜整套配色：背景 + 正文字色同注入，避免「只切背景不切文字 → 夜黑字黑」
+  css.push(`html { background: ${bodyBg}; color: ${textColor}; }`)
+  css.push(`body { background: ${bodyBg}; color: ${textColor}; }`)
+  // 排版数值：根 em 字号（相对默认档位）+ 行距；useOriginalStyle 开则不改字号/行距（仅跟随原书）
   if (!useOriginalStyle) {
-    css.push(`html { font-size: ${fontSize}px; }`)
+    const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
+    css.push(`html { font-size: ${bodyPx.toFixed(1)}px; }`)
     css.push(`body { line-height: ${lineSpacing}; }`)
     // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
     // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
@@ -804,10 +887,13 @@ const applySettings = (persist = true) => {
     if (settings.pageAnim) r.setAttribute?.('animated', '')
     else r.removeAttribute?.('animated')
   }
-  // 阅读器外壳背景（跟随主题）
-  const t = THEMES[settings.theme] || THEMES.sepia
-  document.body.style.background = t.body
-  document.body.style.color = t.text
+  // 日夜配色：给 body 挂 data-scheme 驱动 TOC/设置抽屉等「界面常驻层」CSS 换肤
+  document.body.dataset.scheme = settings.scheme
+  // 阅读器外壳背景/文字色跟随配色（含独立背景覆盖）；html 与 body 双层都设，杜绝四周露白边
+  document.documentElement.style.background = effectiveBg()
+  document.body.style.background = effectiveBg()
+  document.documentElement.style.color = scheme().text
+  document.body.style.color = scheme().text
   if (persist) saveSettings()
 }
 
@@ -947,12 +1033,16 @@ const chipRow = (label, choices, current, onPick) => {
 }
 
 // ── M2 下钻二级页（真实控件，改动即生效并回写）──
-// 字号页
+// 字号页：0..100 相对默认档位（50 = 默认 1.0，整书按根 em 等比缩放）
 const fontSizePage = settingsPage('字号', el => {
   el.append(sliderRow('字号大小', {
-    min: 12, max: 40, step: 1, val: settings.fontSize, fmt: v => `${v}px`,
-    onInput: v => { settings.fontSize = v; applySettings(true); refreshValueLabels() },
+    min: 0, max: 100, step: 1, val: settings.fontScale, fmt: v => fontRatioLabel(v),
+    onInput: v => { settings.fontScale = v; applySettings(true); refreshValueLabels() },
   }))
+  const tip = document.createElement('div')
+  tip.className = 'set-group-title'
+  tip.textContent = '50 = 默认；往右放大、往左缩小的整体缩放'
+  el.append(tip)
 })
 // 行距页
 const lineSpacingPage = settingsPage('行距', el => {
@@ -969,23 +1059,205 @@ const marginPage = settingsPage('页边距', el => {
     { value: 'wide', label: '宽松' },
   ], settings.margin, v => { settings.margin = v; applySettings(true); refreshValueLabels() }))
 })
-// 主题页
-const themePage = settingsPage('主题', el => {
+// 背景色页：独立覆盖背景（原书设置 / 色板 / 自定义取色器），不改变文字与面板配色。
+// 日夜整套配色不在此重复提供——底栏工具栏已有 ☾夜间 一键切换。
+const bgOverridePage = settingsPage('背景色', el => {
   const grid = document.createElement('div')
   grid.className = 'preset-grid'
-  Object.entries(THEMES).forEach(([key, t]) => {
-    const opt = document.createElement('button')
-    opt.type = 'button'
-    opt.className = 'preset-opt' + (settings.theme === key ? ' sel' : '')
-    opt.innerHTML = `<span class="swatch" style="background:${t.body}"></span><span>${themeLabel(key)}</span>`
-    opt.addEventListener('click', () => {
-      grid.querySelectorAll('.preset-opt').forEach(x => x.classList.remove('sel'))
-      opt.classList.add('sel')
-      settings.theme = key; applySettings(true); refreshValueLabels()
+  const build = () => {
+    grid.replaceChildren()
+    // 预设色板：'原书设置' 的 swatch 取当前 scheme 默认背景，其余为固定 hex
+    BG_PRESETS.forEach(p => {
+      const swatchColor = p.value || scheme().bg
+      const opt = document.createElement('button')
+      opt.type = 'button'
+      opt.className = 'preset-opt' + (settings.bgOverride === p.value ? ' sel' : '')
+      opt.innerHTML = `<span class="swatch" style="background:${swatchColor}"></span><span>${p.label}</span>`
+      opt.addEventListener('click', () => {
+        settings.bgOverride = p.value
+        applySettings(true)
+        refreshValueLabels()
+        build()
+        syncCustom((p.value || scheme().bg).replace('#', ''))
+      })
+      grid.append(opt)
     })
-    grid.append(opt)
-  })
+  }
+  build()
   el.append(grid)
+  // ── 自定义：嵌入式调色板（RGB / HSL 双模式滑条）+ RGB 输入（hex / 十进制） ──
+  // 颜色工具
+  function hexToRgb(hex) {
+    let s = (hex || '').replace('#', '').trim()
+    if (!/^[0-9a-f]{6}$/i.test(s) && !/^[0-9a-f]{3}$/i.test(s)) return [0, 0, 0]
+    if (s.length === 3) s = s.split('').map(c => c + c).join('')
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]
+  }
+  function rgbToHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn
+    let h = 0; const l = (mx + mn) / 2
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1))
+    if (d !== 0) {
+      if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) % 6
+      else if (mx === g) h = (b - r) / d + 2
+      else h = (r - g) / d + 4
+      h *= 60
+    }
+    return [h, s * 100, l * 100]
+  }
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100
+    const k = n => (n + h / 30) % 12
+    const a = s * Math.min(l, 1 - l)
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))
+    const to = n => Math.round(255 * f(n)).toString(16).padStart(2, '0')
+    return (to(0) + to(8) + to(4)).toUpperCase()
+  }
+  function rgb2hex(rgb) {
+    return rgb.map(n => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('').toUpperCase()
+  }
+  // 解析用户输入：支持 #hex(#233 / #f4f2ec) 或 rgb 十进制（rgb(244,242,236)/244,242,236/244 242 236）
+  function parseColorInput(str) {
+    const text = (str || '').trim()
+    if (!text) return null
+    let m = text.match(/^rgb\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*\)$/i)
+      || text.match(/^(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*$/)
+    if (m) {
+      const [r, g, b] = [m[1], m[2], m[3]].map(n => Math.max(0, Math.min(255, parseInt(n, 10))))
+      return r.toString(16).padStart(2, '0') + g.toString(16).padStart(2, '0') + b.toString(16).padStart(2, '0')
+    }
+    m = text.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)
+    if (m) {
+      const hex = m[1].length === 3 ? m[1].split('').map(c => c + c).join('') : m[1]
+      return hex.toUpperCase()
+    }
+    return null
+  }
+
+  // 统一内部色状态：hexC 始终为当前色（6 位 hex），rgb/hsl 均为其等价表示，随颜色同步更新
+  const curSrc = /^#?[0-9a-f]{6}$/i.test(settings.bgOverride) ? settings.bgOverride.replace('#', '').toUpperCase() : (scheme().bg || '#f4f2ec').replace('#', '').toUpperCase()
+  let hexC = curSrc
+  let rgb = hexToRgb(hexC)
+  let hsl = rgbToHsl(rgb)
+  let mode = 'rgb' // rgb 为默认模式（对普通用户更直观）
+
+  const cp = document.createElement('div'); cp.className = 'cp-pad'
+  // 模式开关：RGB / HSL
+  const modeRow = document.createElement('div'); modeRow.className = 'cp-mode'
+  const mkModeBtn = (v, l) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'opt-chip' + (mode === v ? ' sel' : '')
+    b.textContent = l
+    b.addEventListener('click', () => { mode = v; applyMode() })
+    return b
+  }
+  const btnRgb = mkModeBtn('rgb', 'RGB'), btnHsl = mkModeBtn('hsl', 'HSL')
+  modeRow.append(btnRgb, btnHsl)
+  // 滑条组
+  // 自绘滑块：纯 div 轨道 + 拖柄，杜绝原生 range 在 WebView 的残留(右侧色条)，并保证与输入行对齐
+  const mkSlider = (label, group) => {
+    const row = document.createElement('div'); row.className = 'cp-row'
+    const lbl = document.createElement('div'); lbl.className = 'cp-label'; lbl.textContent = label
+    const wrap = document.createElement('div'); wrap.className = 'cp-slider'
+    const track = document.createElement('div'); track.className = 'cp-track'
+    const thumb = document.createElement('div'); thumb.className = 'cp-thumb'
+    wrap.append(track, thumb)
+    row.append(lbl, wrap)
+    if (group) group.append(row)
+    const api = { track, max: 100, oninput: null, _v: 0 }
+    api.setValue = v => {
+      v = Math.max(0, Math.min(api.max, +v || 0))
+      api._v = v
+      thumb.style.left = (api.max ? (v / api.max * 100) : 0) + '%'
+    }
+    api.setValue(0)
+    let dragging = false
+    const moveFrom = e => {
+      const r = track.getBoundingClientRect()
+      const p = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)))
+      api.setValue(p * api.max)
+      if (api.oninput) api.oninput()
+    }
+    wrap.addEventListener('pointerdown', e => {
+      dragging = true
+      if (wrap.setPointerCapture) wrap.setPointerCapture(e.pointerId)
+      moveFrom(e); e.preventDefault()
+    })
+    wrap.addEventListener('pointermove', e => { if (dragging) moveFrom(e) })
+    const end = () => { dragging = false }
+    wrap.addEventListener('pointerup', end); wrap.addEventListener('pointercancel', end)
+    return api
+  }
+  // HSL 组：色相(0-360)、饱和度(0-100)、明度(0-100)
+  const hslGroup = document.createElement('div')
+  const hueEl = mkSlider('色相', hslGroup), satEl = mkSlider('饱和度', hslGroup), lightEl = mkSlider('明度', hslGroup)
+  hueEl.max = 360; satEl.max = 100; lightEl.max = 100
+  // RGB 组：R/G/B(0-255)
+  const rgbGroup = document.createElement('div')
+  const rEl = mkSlider('R', rgbGroup), gEl = mkSlider('G', rgbGroup), bEl = mkSlider('B', rgbGroup)
+  ;[rEl, gEl, bEl].forEach(e => { e.max = 255 })
+  // 更新所有滑条渐变底（随当前色联动的通道渐变；明度：左黑→右白，与饱和度同向递增）
+  function drawGradients() {
+    const h = hsl[0], [r, g, b] = rgb.slice()
+    hueEl.track.style.background = 'linear-gradient(to right, hsl(0,100%,50%), hsl(60,100%,50%), hsl(120,100%,50%), hsl(180,100%,50%), hsl(240,100%,50%), hsl(300,100%,50%), hsl(360,100%,50%))'
+    satEl.track.style.background = `linear-gradient(to right, hsl(${h},0%,50%), hsl(${h},100%,50%))`
+    lightEl.track.style.background = `linear-gradient(to right, hsl(${h},100%,0%), hsl(${h},100%,50%), hsl(${h},100%,100%))`
+    rEl.track.style.background = `linear-gradient(to right, rgb(0,${g},${b}), rgb(255,${g},${b}))`
+    gEl.track.style.background = `linear-gradient(to right, rgb(${r},0,${b}), rgb(${r},255,${b}))`
+    bEl.track.style.background = `linear-gradient(to right, rgb(${r},${g},0), rgb(${r},${g},255))`
+  }
+  // 把当前色移动所有滑条/文本/色块到对应位置并应用
+  function paint() {
+    hueEl.setValue(Math.round(hsl[0])); satEl.setValue(Math.round(hsl[1])); lightEl.setValue(Math.round(hsl[2]))
+    rEl.setValue(Math.round(rgb[0])); gEl.setValue(Math.round(rgb[1])); bEl.setValue(Math.round(rgb[2]))
+    drawGradients()
+    txtEl.value = '#' + hexC.toLowerCase()
+    swEl.style.background = '#' + hexC.toLowerCase()
+    settings.bgOverride = '#' + hexC.toLowerCase()
+    applySettings(true); refreshValueLabels()
+  }
+  // 仅把滑条/文本移到某个 hex（不做应用）
+  function syncOnly(hex6) {
+    hexC = hex6.replace('#', '').toUpperCase(); rgb = hexToRgb(hexC); hsl = rgbToHsl(rgb)
+    hueEl.setValue(Math.round(hsl[0])); satEl.setValue(Math.round(hsl[1])); lightEl.setValue(Math.round(hsl[2]))
+    rEl.setValue(Math.round(rgb[0])); gEl.setValue(Math.round(rgb[1])); bEl.setValue(Math.round(rgb[2]))
+    drawGradients()
+    txtEl.value = '#' + hexC.toLowerCase(); swEl.style.background = '#' + hexC.toLowerCase()
+  }
+  // 仅切换显示模式
+  function applyMode() {
+    const isHsl = mode === 'hsl'
+    hslGroup.style.display = isHsl ? '' : 'none'
+    rgbGroup.style.display = isHsl ? 'none' : ''
+    btnHsl.classList.toggle('sel', isHsl); btnRgb.classList.toggle('sel', !isHsl)
+  }
+  // 拖动事件：读出所在模式滑条更新等价表示，再统一绘制
+  hueEl.oninput = () => { hsl[0] = +hueEl._v; hexC = hslToHex(hsl[0], hsl[1], hsl[2]); rgb = hexToRgb(hexC); drawGradients(); paint() }
+  satEl.oninput = () => { hsl[1] = +satEl._v; hexC = hslToHex(hsl[0], hsl[1], hsl[2]); rgb = hexToRgb(hexC); paint() }
+  lightEl.oninput = () => { hsl[2] = +lightEl._v; hexC = hslToHex(hsl[0], hsl[1], hsl[2]); rgb = hexToRgb(hexC); paint() }
+  rEl.oninput = () => { rgb[0] = +rEl._v; hexC = rgb2hex(rgb); hsl = rgbToHsl(rgb); drawGradients(); paint() }
+  gEl.oninput = () => { rgb[1] = +gEl._v; hexC = rgb2hex(rgb); hsl = rgbToHsl(rgb); paint() }
+  bEl.oninput = () => { rgb[2] = +bEl._v; hexC = rgb2hex(rgb); hsl = rgbToHsl(rgb); paint() }
+
+  const inputRow = document.createElement('div'); inputRow.className = 'cp-input-row'
+  const txtEl = document.createElement('input'); txtEl.type = 'text'; txtEl.placeholder = '#f4f2ec 或 244,242,236'
+  const swEl = document.createElement('div'); swEl.className = 'cp-swatch'
+  txtEl.addEventListener('change', () => {
+    const hex6 = parseColorInput(txtEl.value)
+    if (hex6) applyInput(hex6)
+    else txtEl.value = '#' + (settings.bgOverride || scheme().bg).replace('#', '').toLowerCase()
+  })
+  inputRow.append(swEl, txtEl)
+
+  // 应用输入/预设 hex：更新颜色表示 + 应用
+  function applyInput(hex6) {
+    syncOnly(hex6); settings.bgOverride = '#' + hexC.toLowerCase(); applySettings(true); refreshValueLabels()
+  }
+
+  cp.append(modeRow, hslGroup, rgbGroup, inputRow)
+  applyMode()   // 默认显示 RGB 组
+  syncOnly(curSrc) // 打开面板即把滑块置于当前实际背景色对应位置
+  el.append(cp)
 })
 // 排版主题页：原书设置/现代/传统（列表单选，每行一行居中，原书也作为一个选项）
 const layoutThemePage = settingsPage('排版主题', el => {
@@ -1120,13 +1392,14 @@ const fontPickerPage = (key, title) => {
   return page
 }
 
-// 刷新顶层可下钻行的取值标签（字号/行距/边距/主题/字体分类）
+// 刷新顶层可下钻行的取值标签（字号/行距/边距/配色/背景/排版主题/字体分类）
 const refreshValueLabels = () => {
   const v = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
-  v('v-font-size', `${settings.fontSize}px`)
+  v('v-font-size', fontRatioLabel(settings.fontScale))
   v('v-line-spacing', `×${Number(settings.lineSpacing).toFixed(1)}`)
   v('v-margin', MARGIN_LABELS[settings.margin] ?? '常规')
-  v('v-theme', themeLabel(settings.theme))
+  v('v-bg', bgLabel(settings.bgOverride))
+  v('v-layout-theme', layoutThemeLabel(settings.layoutTheme))
   v('v-font-face', settings.useOriginalStyle ? '跟随原书' : '自定义')
   // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
   FONT_KEYS.forEach(([key]) => {
@@ -1140,12 +1413,12 @@ const refreshValueLabels = () => {
 
 // 顶层：所有设置项平铺；可下钻项带 ›，开关项直接切换
 const settingsTopPage = settingsPage('设置', el => {
-  el.append(settingsRow('字号', { valId: 'v-font-size', value: `${settings.fontSize}px`, onTap: () => pushSettingsPage(fontSizePage, '字号') }))
+  el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
   el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
   el.append(settingsRow('页边距', { valId: 'v-margin', value: MARGIN_LABELS[settings.margin] ?? '常规', onTap: () => pushSettingsPage(marginPage, '页边距') }))
   el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
-  el.append(settingsRow('阅读背景', { valId: 'v-theme', value: themeLabel(settings.theme), onTap: () => pushSettingsPage(themePage, '主题') }))
+  el.append(settingsRow('背景色', { valId: 'v-bg', value: bgLabel(settings.bgOverride), onTap: () => pushSettingsPage(bgOverridePage, '背景色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
   el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 进度续读由后端 BookReadingState 控制，此开关后续接线
