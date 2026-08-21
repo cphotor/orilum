@@ -330,6 +330,10 @@
   .set-row .set-label { flex: 1; }
   .set-row .set-value { color: #888; font-size: 13px; margin-right: 4px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .set-row .set-chevron { color: #bbb; font-size: 14px; }
+  /* 排版主题：列表单选、每行一行、内容居中、选中高亮 */
+  .theme-opt { justify-content: center; }
+  .theme-opt .set-label { flex: 1; text-align: center; color: #666; }
+  .theme-opt.sel .set-label { color: #2b2b2b; font-weight: 600; }
   /* 开关 */
   .switch {
     position: relative;
@@ -355,6 +359,58 @@
   }
   .switch input:checked + .track { background: #c8a15a; }
   .switch input:checked + .track .thumb { transform: translateX(18px); }
+  /* 滑块细则行（字号 A-/A+/滑块；行距） */
+  .set-row.slider-row { flex-wrap: wrap; }
+  .slider-controls {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; margin-top: 10px; padding: 0 2px;
+  }
+  .slider-btn {
+    background: #f0ede6; border: none; border-radius: 6px;
+    width: 34px; height: 34px; font-size: 16px; font-weight: 600;
+    color: #4a4a4a; cursor: pointer; flex-shrink: 0;
+  }
+  .slider-btn:active { background: #e1dccf; }
+  .slider-btn.disabled { opacity: 0.35; pointer-events: none; }
+  .slider-row input[type="range"] {
+    flex: 1; min-width: 0; accent-color: #c8a15a; height: 28px;
+  }
+  .slider-val { font-size: 13px; color: #888; min-width: 34px; text-align: right; flex-shrink: 0; }
+  /* 主题/预设选项（网格按钮） */
+  .preset-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    padding: 12px 16px 16px;
+  }
+  .preset-opt {
+    border: 1px solid #e3dfd5; border-radius: 8px; padding: 10px 6px;
+    text-align: center; font-size: 12px; color: #666; cursor: pointer;
+    background: #fff; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .preset-opt .swatch {
+    width: 100%; height: 34px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.08);
+  }
+  .preset-opt.sel { border-color: #c8a15a; background: #faf3e6; color: #8a5f1f; }
+  /* 页边距 + 行距预设 */
+  .opt-chips { display: flex; gap: 8px; padding: 8px 16px 16px; flex-wrap: wrap; }
+  .opt-chip {
+    border: 1px solid #e3dfd5; border-radius: 16px; padding: 7px 14px;
+    font-size: 13px; color: #555; cursor: pointer; background: #fff;
+  }
+  .opt-chip.sel { border-color: #c8a15a; background: #faf3e6; color: #8a5f1f; }
+  /* 字体选择页：分中文/英文两组，行内以字体自身字形预览 */
+  .font-group-scrim { padding: 4px 0 24px; }
+  .font-group-title {
+    padding: 12px 20px 6px; font-size: 12px; color: #9a9279; letter-spacing: 0.5px;
+  }
+  .font-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 0 16px; padding: 13px 14px; border-bottom: 1px solid #f0ece2;
+    cursor: pointer; font-size: 17px; color: #3a3a32;
+  }
+  .font-row:last-child { border-bottom: none; }
+  .font-row.sel { background: #faf3e6; }
+  .font-sample { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .font-check { flex-shrink: 0; color: #c8a15a; font-size: 15px; margin-left: 10px; }
 </style>
 </head>
 <body>
@@ -591,6 +647,192 @@ document.querySelectorAll('#tools-row .tool:not(#tool-toc):not(#tool-settings)')
 $('btn-toc-close').addEventListener('click', closeTOC)
 $('toc-scrim').addEventListener('click', closeTOC)
 
+// ── 阅读设置：状态 / 应用 / 持久化 ──────────────────────────
+// 后端配置数据层（Kotlin ReaderSettings）已就绪：
+//   getSettings()   读当前生效值（用户套，无则默认套）
+//   saveSettings()  写入用户套
+//   resetSettings() 一键重置回默认套并返回默认 JSON
+// 本层维护 JS 侧拷贝 settings，改动后先应用到渲染再回写，保证 UI 与生效值一致。
+const defaultSettings = {
+  theme: 'sepia', fontSize: 18, lineSpacing: 1.6, margin: 'normal',
+  fontBody: '', fontTitle: '', fontCode: '', fontBold: '', fontItalic: '',
+  // 中英分离开关 + 每分类的中文字体（分离开启时才使用，负责 CJK 区段）
+  useCjkFont: false,
+  fontBodyCjk: '', fontTitleCjk: '', fontCodeCjk: '', fontBoldCjk: '', fontItalicCjk: '',
+  useOriginalStyle: false, useUserScripts: false,
+  // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
+  layoutTheme: 'original',
+  pageAnim: true, autoContinue: true, pageNum: false,
+}
+let settings = { ...defaultSettings }
+
+const bridgeGet = (name) =>
+  typeof EPUBBridge !== 'undefined' && EPUBBridge[name] ? EPUBBridge[name]() : null
+
+/** 主题预设：key -> { 阅读背景(iframe)，面板/页面背景, 文字色 } */
+const THEMES = {
+  sepia: { body: '#f4f2ec', panel: '#faf8f4', text: '#2b2b2b' },
+  white: { body: '#ffffff', panel: '#ffffff', text: '#2b2b2b' },
+  dark: { body: '#141414', panel: '#1c1c1e', text: '#e8e8e8' },
+}
+/** 页边距预设 -> iframe max-inline-size（控制行宽），单位 em */
+const MARGINS = { compact: '60em', normal: '720px', wide: '900px' }
+
+/**
+ * 排版主题预设：key -> { label, css }
+ * 「原书设置」不注入排版规则（css 为空），字体仅靠缺字体兜底。
+ * 现代：无首行缩进，段落靠段间距区隔。
+ * 传统：首行缩进两字符，无段间距，正文采用衬线字族。
+ * 字族主题规则挂在 body 层作为「css模板」默认值，用户自选字体（逐条/界面控件层）会覆盖它。
+ * 段落缩进与段距控制在 p 层，与根字号 em 兼容。
+ */
+const LAYOUT_THEMES = {
+  original: { label: '原书设置', css: '' },
+  modern: {
+    label: '现代模式',
+    css: `
+body, p, h1,h2,h3,h4,h5,h6 { font-family: sans-serif; }
+body { line-height: 1.85; }
+p { text-indent: 0; margin-block: 1em 0; }
+h1,h2,h3,h4,h5,h6 { margin-block: 1.3em 0.5em; }
+`,
+  },
+  traditional: {
+    label: '传统模式',
+    css: `
+body, p { font-family: serif; }
+p { text-indent: 2em; margin-block: 0; }
+h1,h2,h3,h4,h5,h6 { font-family: sans-serif; margin-block: 1.1em 0.35em; }
+`,
+  },
+}
+const layoutThemeLabel = key => LAYOUT_THEMES[key]?.label ?? '原书设置'
+
+// 显示用标签（须在 themePage/marginPage 等页面构建前定义，否则模块加载触发 TDZ）
+const MARGIN_LABELS = { compact: '紧凑', normal: '常规', wide: '宽松' }
+const themeLabel = key => ({ sepia: '羊皮纸', white: '亮白', dark: '暗夜' }[key] ?? key)
+// 字体池：从 Kotlin 拉取设备真实可用的字体（系统扫描 + 用户导入）。
+// 每项 {key(源文件标识，供 /fonts/{key} 加载), name(文件名去扩展名), lang(cjk|latin|generic)}；
+// 选择值用内部别名 alias 记入 settings（'' = 跟随原书），CSS 里经 @font-face url(/fonts/{key}) 实际加载源文件。
+let fontFaces = []
+const aliasOf = f => `folilib_${f.key}`
+let faceByAlias = new Map()
+// 各字体分类页的重绘闭包（key -> fn），导入完成后重排网格
+const fontGridHosts = new Map()
+let FONT_CHOICES = [{ value: '', label: '跟随原书', face: null }]
+const fontLabel = v => { if (!v) return '跟随原书'; const f = faceByAlias.get(v); return f ? f.name : v }
+// 字体五分类的 key -> 显示名（尽量与 top/二级页入口一致）
+const FONT_KEYS = [['fontBody', '正文'], ['fontTitle', '标题'], ['fontCode', '代码'], ['fontBold', '粗体'], ['fontItalic', '斜体']]
+
+// 从后端重载字体池：刷新 FONT_CHOICES 与别名映射，并重绘已构建的选择网格。
+// （启动时先调一次；导入字体完成后经 onFontsChanged 再调。）
+const reloadFonts = () => {
+  let list = []
+  try { const raw = bridgeGet('listFonts'); if (raw) list = JSON.parse(raw) } catch (e) { list = [] }
+  fontFaces = list
+  faceByAlias = new Map(fontFaces.map(f => [aliasOf(f), f]))
+  FONT_CHOICES = [
+    { value: '', label: '跟随原书', face: null },
+    ...fontFaces.map(f => ({ value: aliasOf(f), label: f.name, face: f })),
+  ]
+  fontGridHosts.forEach((render) => render())
+}
+reloadFonts()
+
+// 生成注入正文的排版 CSS：字号、行距、页边距（行宽）、主题背景、字体五分类映射
+const buildReadingCSS = () => {
+  const { theme, fontSize, lineSpacing, margin, useOriginalStyle, layoutTheme,
+    fontBody, fontTitle, fontCode, fontBold, fontItalic } = settings
+  const t = THEMES[theme] || THEMES.sepia
+  const bodyBg = t.body
+  const css = []
+  // 行宽（页边距）：作用于正文容器；672px 在平板视口内形成可靠的单列分栏
+  if (margin) css.push(`html, body { max-inline-size: ${MARGINS[margin] || MARGINS.normal}; margin-inline: auto; }`)
+  // 主题背景：注入到 iframe 根元素，避免白闪
+  css.push(`html { background: ${bodyBg}; } body { background: ${bodyBg}; }`)
+  // 排版数值：字体大小 + 行距；useOriginalStyle 开则不改字号/行距（仅跟随原书）
+  if (!useOriginalStyle) {
+    css.push(`html { font-size: ${fontSize}px; }`)
+    css.push(`body { line-height: ${lineSpacing}; }`)
+    // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
+    // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
+    const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
+    if (lt.css) css.push(lt.css)
+  }
+  // 字体五分类：映射到对应元素；空串/跟随原书则跳过
+  if (!useOriginalStyle) {
+    const { useCjkFont } = settings
+    // CJK 区段（unicode-range）：分离开启时中文字体仅声明此区段，西文字符自动回退到主字体
+    const CJK_RANGE = 'U+3000-303F, U+3040-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF'
+    const cjkAlias = a => (a ? `${a}_cjk` : a)
+    // 五分类 -> [主字体字段, 中文字体字段, 对应选择器, 兜底族]
+    const cats = [
+      ['body', fontBody, 'fontBodyCjk', 'body, html', 'serif'],
+      ['title', fontTitle, 'fontTitleCjk', 'h1,h2,h3,h4,h5,h6', 'sans-serif'],
+      ['code', fontCode, 'fontCodeCjk', 'code,pre,kbd,samp', 'monospace'],
+      ['bold', fontBold, 'fontBoldCjk', 'strong,b', 'sans-serif'],
+      ['italic', fontItalic, 'fontItalicCjk', 'em,i', 'serif'],
+    ]
+    // 收集主字体与中文字体的所有 alias，去重生成 @font-face（中文字体带 unicode-range，仅声明 CJK 区段）
+    const mains = new Set(), cjks = new Set()
+    cats.forEach(([, main, cjkKey]) => { if (main) mains.add(main); if (useCjkFont && settings[cjkKey]) cjks.add(settings[cjkKey]) })
+    mains.forEach(alias => {
+      const f = faceByAlias.get(alias)
+      if (f) css.push(`@font-face { font-family: '${alias}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; }`)
+    })
+    if (useCjkFont) cjks.forEach(alias => {
+      const f = faceByAlias.get(alias)
+      if (f) css.push(`@font-face { font-family: '${cjkAlias(alias)}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; unicode-range: ${CJK_RANGE}; }`)
+    })
+    cats.forEach(([, main, cjkKey, sel, fb]) => {
+      const fam = []
+      // 分离开启时中文字体置前：CJK 字符命中它，西文字符（unicode-range 不命中）回退到主字体
+      if (useCjkFont && settings[cjkKey]) fam.push(`'${cjkAlias(settings[cjkKey])}'`)
+      if (main) fam.push(`'${main}'`)
+      if (fam.length) css.push(`${sel} { font-family: ${fam.join(', ')}, ${fb}; }`)
+    })
+  }
+  return css.join('\n')
+}
+
+// 把当前 settings 应用到渲染（注入 iframe CSS + 面板/阅读器外观）
+const applySettings = (persist = true) => {
+  const r = view.renderer
+  if (r && r.setStyles) r.setStyles(buildReadingCSS())
+  // 翻页动画
+  if (r) {
+    if (settings.pageAnim) r.setAttribute?.('animated', '')
+    else r.removeAttribute?.('animated')
+  }
+  // 阅读器外壳背景（跟随主题）
+  const t = THEMES[settings.theme] || THEMES.sepia
+  document.body.style.background = t.body
+  document.body.style.color = t.text
+  if (persist) saveSettings()
+}
+
+// 回写当前 settings 到后端（整份覆盖）
+const saveSettings = () => {
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.saveSettings) {
+    EPUBBridge.saveSettings(JSON.stringify(settings))
+    log('settings saved')
+  }
+}
+
+// 一键重置：删除用户套 → 后端返回默认 JSON → 刷新本地状态并应用
+const resetSettings = () => {
+  const d = bridgeGet('resetSettings')
+  if (d) {
+    settings = { ...defaultSettings, ...JSON.parse(d) }
+  } else {
+    settings = { ...defaultSettings }
+  }
+  refreshSettingsUI()
+  refreshValueLabels()
+  applySettings(true)
+  toast('已恢复默认设置')
+}
+
 // ── 设置抽屉：多级下钻页面栈 ──────────────────
 // 页面栈：pages 为元素数组，栈顶即当前页。push 切入、pop 回退。
 const settingsPages = []
@@ -599,6 +841,18 @@ const settingsBackBtn = $('btn-settings-back')
 const settingsPageHost = $('settings-pages')
 
 const pushSettingsPage = (el, title) => {
+  // 同一页元素（缓存复用，如 fontPickerPage / fontFacePage）可能被重复 push，导致
+  // 页面栈里出现同一引用的多个层级、pop 后状态错乱、内容空白。先移除已存在的旧位，
+  // 保证栈内元素唯一，再把该页切到栈顶激活。
+  const existing = settingsPages.indexOf(el)
+  if (existing >= 0) {
+    // 把 el 及其后的层级全部弹出（回到该页），即后退到该页语义
+    while (settingsPages.length - 1 > existing) settingsPages.pop().classList.remove('active')
+    settingsPages[existing].classList.add('active')
+    settingsTitleEl.textContent = title
+    settingsBackBtn.style.visibility = 'visible'
+    return
+  }
   settingsPages.forEach(p => p.classList.remove('active'))
   el.classList.add('active')
   settingsPages.push(el)
@@ -623,12 +877,13 @@ const settingsPage = (title, build) => {
   settingsPageHost.append(el)
   return el
 }
-const settingsRow = (label, { value, onTap } = {}) => {
+const settingsRow = (label, { value, valId, onTap } = {}) => {
   const div = document.createElement('div')
   div.className = 'set-row'
   div.innerHTML = `<span class="set-label">${label}</span>`
   if (value !== undefined) {
-    div.insertAdjacentHTML('beforeend', `<span class="set-value">${value}</span>`)
+    // valId 供 refreshValueLabels() 更新可下钻行的取值；无 id 的下钻行也显示 chevron
+    div.insertAdjacentHTML('beforeend', `<span class="set-value"${valId ? ` id="${valId}"` : ''}>${value}</span>`)
     div.insertAdjacentHTML('beforeend', '<span class="set-chevron">›</span>')
   }
   if (onTap) div.addEventListener('click', onTap)
@@ -643,53 +898,293 @@ const settingsSwitch = (label, id, onChange) => {
   return div
 }
 
-// ── M2 下钻二级页骨架（具体控件待 M2 数据层接入，先建导航壳）──
-// 字号下钻页（保留，供 M2 接真实控件）
+// ── 工具函数：创建滑块细则行 / 选项 chips ──────────────────
+// 字号细则：- 滑块 +；行距细则：- 滑块 +
+const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
+  const div = document.createElement('div')
+  div.className = 'set-row slider-row'
+  div.innerHTML = `<span class="set-label">${label}</span>
+    <span class="slider-controls">
+      <button type="button" class="slider-btn minus">−</button>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}">
+      <button type="button" class="slider-btn plus">+</button>
+      <span class="slider-val">${fmt ? fmt(val) : val}</span>
+    </span>`
+  const input = div.querySelector('input')
+  const valEl = div.querySelector('.slider-val')
+  const minus = div.querySelector('.minus'), plus = div.querySelector('.plus')
+  const clamp = v => Math.min(max, Math.max(min, v))
+  const setVal = v => { input.value = v; valEl.textContent = fmt ? fmt(v) : v }
+  minus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) - step)); onInput?.(parseFloat(input.value)) })
+  plus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) + step)); onInput?.(parseFloat(input.value)) })
+  input.addEventListener('input', () => { valEl.textContent = fmt ? fmt(input.value) : input.value })
+  input.addEventListener('change', () => onInput?.(parseFloat(input.value)))
+  return div
+}
+
+// 选项 chips（页边距/主题的选择行）
+const chipRow = (label, choices, current, onPick) => {
+  const div = document.createElement('div')
+  div.className = 'set-row'
+  div.innerHTML = `<span class="set-label">${label}</span><span class="slider-val">${current}</span>`
+  const chips = document.createElement('div')
+  chips.className = 'opt-chips'
+  choices.forEach(c => {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'opt-chip' + (c.value === current ? ' sel' : '')
+    chip.textContent = c.label
+    chip.addEventListener('click', () => {
+      chips.querySelectorAll('.opt-chip').forEach(x => x.classList.remove('sel'))
+      chip.classList.add('sel')
+      div.querySelector('.slider-val').textContent = c.label
+      onPick?.(c.value)
+    })
+    chips.append(chip)
+  })
+  div.append(chips)
+  return div
+}
+
+// ── M2 下钻二级页（真实控件，改动即生效并回写）──
+// 字号页
 const fontSizePage = settingsPage('字号', el => {
-  el.append(settingsRow('字号大小', { value: '15px', onTap: () => toast('字号设置(M2)开发中') }))
+  el.append(sliderRow('字号大小', {
+    min: 12, max: 40, step: 1, val: settings.fontSize, fmt: v => `${v}px`,
+    onInput: v => { settings.fontSize = v; applySettings(true); refreshValueLabels() },
+  }))
 })
-// 字体五分类下钻页（M2）
-const fontFacePage = settingsPage('字体', el => {
-  el.append(settingsRow('正文/标题/代码/粗体/斜体', { value: '', onTap: () => toast('字体五分类(M2)开发中') }))
-})
-// 行距下钻页（M2）
+// 行距页
 const lineSpacingPage = settingsPage('行距', el => {
-  el.append(settingsRow('行距', { value: '1.6', onTap: () => toast('行距设置(M2)开发中') }))
+  el.append(sliderRow('行距', {
+    min: 1.0, max: 2.5, step: 0.1, val: settings.lineSpacing, fmt: v => `×${Number(v).toFixed(1)}`,
+    onInput: v => { settings.lineSpacing = v; applySettings(true); refreshValueLabels() },
+  }))
 })
-// 主题下钻页（M2）
+// 页边距页
+const marginPage = settingsPage('页边距', el => {
+  el.append(chipRow('行宽', [
+    { value: 'compact', label: '紧凑' },
+    { value: 'normal', label: '常规' },
+    { value: 'wide', label: '宽松' },
+  ], settings.margin, v => { settings.margin = v; applySettings(true); refreshValueLabels() }))
+})
+// 主题页
 const themePage = settingsPage('主题', el => {
-  el.append(settingsRow('阅读背景', { value: '羊皮纸', onTap: () => toast('主题设置(M2)开发中') }))
+  const grid = document.createElement('div')
+  grid.className = 'preset-grid'
+  Object.entries(THEMES).forEach(([key, t]) => {
+    const opt = document.createElement('button')
+    opt.type = 'button'
+    opt.className = 'preset-opt' + (settings.theme === key ? ' sel' : '')
+    opt.innerHTML = `<span class="swatch" style="background:${t.body}"></span><span>${themeLabel(key)}</span>`
+    opt.addEventListener('click', () => {
+      grid.querySelectorAll('.preset-opt').forEach(x => x.classList.remove('sel'))
+      opt.classList.add('sel')
+      settings.theme = key; applySettings(true); refreshValueLabels()
+    })
+    grid.append(opt)
+  })
+  el.append(grid)
+})
+// 排版主题页：原书设置/现代/传统（列表单选，每行一行居中，原书也作为一个选项）
+const layoutThemePage = settingsPage('排版主题', el => {
+  const options = [
+    { value: 'original', label: '原书设置' },
+    { value: 'modern', label: '现代模式' },
+    { value: 'traditional', label: '传统模式' },
+  ]
+  const build = () => {
+    el.replaceChildren()
+    options.forEach(o => {
+      const row = document.createElement('div')
+      row.className = 'set-row theme-opt' + (o.value === settings.layoutTheme ? ' sel' : '')
+      row.innerHTML = `<span class="set-label">${o.label}</span>`
+      if (o.value !== settings.layoutTheme) {
+        row.addEventListener('click', () => {
+          settings.layoutTheme = o.value
+          applySettings(true)
+          refreshValueLabels()
+          build()
+        })
+      }
+      el.append(row)
+    })
+  }
+  build()
+})
+// 字体五分类页：跟随原书开关 + 中英分离开关 + 五分类入口（各下钻到对应字体选择页）
+const fontFacePage = settingsPage('字体', el => {
+  // 全局总开关：跟随原书样式（开则所有字体/字号行距都不注入）
+  const orig = settingsSwitch('跟随原书样式', 'set-orig', v => {
+    settings.useOriginalStyle = v; applySettings(true); refreshValueLabels()
+  })
+  orig.querySelector('input').checked = settings.useOriginalStyle
+  el.append(orig)
+  // 中英分离开关：开启后每个分类可分别指定中文字体（CJK）与英文字体（主字体）
+  const sep = settingsSwitch('中英文字体分离', 'set-cjk-sep', v => {
+    settings.useCjkFont = v; applySettings(true); refreshValueLabels()
+  })
+  sep.querySelector('input').checked = settings.useCjkFont
+  el.append(sep)
+  // 五个分类各为一行，点击进入该分类的字体网格选择页
+  FONT_KEYS.forEach(([key, label]) => {
+    el.append(settingsRow(label, {
+      valId: 'fv-' + key,
+      value: fontLabel(settings[key] || ''),
+      onTap: () => pushSettingsPage(fontPickerPage(key, label), label),
+    }))
+  })
+  // 指定目录导入：选择字体目录（直接引用，不拷贝），确认后桥回调刷新字体列表（删源文件即消失）
+  el.append(settingsRow('指定目录导入…', {
+    onTap: () => { if (EPUBBridge && EPUBBridge.pickFontDirectory) EPUBBridge.pickFontDirectory() },
+  }))
 })
 
-// 顶层：所有设置项平铺，从上到下排列；可下钻项带 ›，开关项直接切换
+// 导入字体完成后由 Kotlin 回调：重载字体池并刷新取值标签（含已打开的选择网格）
+window.folioWebView = window.folioWebView || {}
+window.folioWebView.onFontsChanged = () => { reloadFonts(); refreshValueLabels() }
+
+// 字体选择页生成器（每分类独立一页，缓存复用；选中即改 settings/应用到渲染）
+// 列表式：分「中文字体 / 英文字体」两组（按 lang），每组一行一个字体，行内以字体自身字形渲染其名（预览）。
+// 供预览的临时 @font-face 挂在页面顶部的 <style id="fontPreviewStyle"> 里，逐行注入/复用。
+const ensureFontPreviewStyle = () => {
+  let s = document.getElementById('fontPreviewStyle')
+  if (!s) { s = document.createElement('style'); s.id = 'fontPreviewStyle'; document.head.append(s) }
+  return s
+}
+const fontPickerPages = new Map()
+const fontPickerPage = (key, title) => {
+  let page = fontPickerPages.get(key)
+  if (page) return page
+  let host
+  page = settingsPage(title, el => { host = el })
+  const render = () => {
+    host.innerHTML = ''
+    // 预收集所有行需要的预览 @font-face（CSS 里已同名 alias 的不重复注入）
+    const styleEl = ensureFontPreviewStyle()
+    const previewAliases = new Set()
+    FONT_CHOICES.forEach(c => { if (c.face) previewAliases.add(aliasOf(c.face)) })
+    const extra = [...previewAliases].map(a => {
+      const f = faceByAlias.get(a)
+      return `@font-face { font-family: '${a}'; src: url('/fonts/${encodeURIComponent(f.key)}'); }`
+    }).join('\n')
+    if (extra !== styleEl.dataset.prev) { styleEl.dataset.prev = extra; styleEl.textContent = extra }
+
+    const scrim = document.createElement('div')
+    scrim.className = 'font-group-scrim'
+    // 分离模式：中文段写入 key+Cjk（负责 CJK），英文段写入 key（主字体）。
+    // 未分离：中文/英文两组都写入同一 key（全部字符用一个字体）。
+    const cjkField = settings.useCjkFont ? (key + 'Cjk') : key
+    const group = (gLabel, items, field) => {
+      const sec = document.createElement('div')
+      sec.className = 'font-group'
+      if (!items.length) return sec
+      const h = document.createElement('div')
+      h.className = 'font-group-title'
+      h.textContent = gLabel
+      sec.append(h)
+      items.forEach(c => {
+        const row = document.createElement('div')
+        row.className = 'font-row' + (settings[field] === c.value ? ' sel' : '')
+        // 行内预览：用所选字体自身渲染名称
+        const fam = c.face ? `'${aliasOf(c.face)}', serif` : 'inherit'
+        row.innerHTML = `<span class="font-sample" style="font-family:${fam}">${c.label}</span>` +
+          `<span class="font-check">${settings[field] === c.value ? '✓' : ''}</span>`
+        row.addEventListener('click', () => {
+          settings[field] = c.value
+          render() // 整页重绘，避免跨段错勾选
+          applySettings(true)
+          refreshValueLabels()
+        })
+        sec.append(row)
+      })
+      return sec
+    }
+    const cjk = FONT_CHOICES.filter(c => !c.face || c.face.lang === 'cjk' || c.face.lang === 'generic')
+    const latin = FONT_CHOICES.filter(c => c.face && c.face.lang === 'latin')
+    scrim.append(group('中文字体', cjk, cjkField))
+    scrim.append(group('英文字体', latin, key))
+    // 分离模式提示：两段各自独立选择
+    if (settings.useCjkFont) {
+      const tip = document.createElement('div')
+      tip.className = 'set-group-title'
+      tip.textContent = '中文字体作用于汉字/CJK，英文字体作用于字母与符号'
+      scrim.append(tip)
+    }
+    host.append(scrim)
+  }
+  fontGridHosts.set(key, render)
+  render()
+  fontPickerPages.set(key, page)
+  return page
+}
+
+// 刷新顶层可下钻行的取值标签（字号/行距/边距/主题/字体分类）
+const refreshValueLabels = () => {
+  const v = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
+  v('v-font-size', `${settings.fontSize}px`)
+  v('v-line-spacing', `×${Number(settings.lineSpacing).toFixed(1)}`)
+  v('v-margin', MARGIN_LABELS[settings.margin] ?? '常规')
+  v('v-theme', themeLabel(settings.theme))
+  v('v-font-face', settings.useOriginalStyle ? '跟随原书' : '自定义')
+  // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
+  FONT_KEYS.forEach(([key]) => {
+    if (settings.useCjkFont && settings[key + 'Cjk']) {
+      v('fv-' + key, `英:${fontLabel(settings[key] || '')} 中:${fontLabel(settings[key + 'Cjk'])}`)
+    } else {
+      v('fv-' + key, fontLabel(settings[key] || ''))
+    }
+  })
+}
+
+// 顶层：所有设置项平铺；可下钻项带 ›，开关项直接切换
 const settingsTopPage = settingsPage('设置', el => {
-  el.append(settingsRow('字号', { value: '15px', onTap: () => pushSettingsPage(fontSizePage, '字号') }))
-  el.append(settingsRow('行距', { value: '1.6', onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
-  el.append(settingsRow('页边距', { value: '常规', onTap: () => toast('边距设置(M2)开发中') }))
-  el.append(settingsRow('字体(正/题/码/粗/斜)', { value: '', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
-  el.append(settingsRow('阅读背景', { value: '羊皮纸', onTap: () => pushSettingsPage(themePage, '主题') }))
-  el.append(settingsSwitch('翻页动画', 'set-page-anim',
-    v => { log(`set page-anim=${v}`)
-      if (v) view.renderer?.setAttribute?.('animated', '')
-      else view.renderer?.removeAttribute?.('animated') }
-  ))
-  el.append(settingsSwitch('打开时自动续读', 'set-auto-continue',
-    v => log(`set auto-continue=${v}`) // 与阅读进度存读恢复耦合，见 TODO(settings)
-  ))
-  el.append(settingsSwitch('显示页码', 'set-page-num',
-    v => log(`set page-num=${v}`) // 页码显示依赖分页计数方案，见 PROJECT_STATUS TODO
-  ))
+  el.append(settingsRow('字号', { valId: 'v-font-size', value: `${settings.fontSize}px`, onTap: () => pushSettingsPage(fontSizePage, '字号') }))
+  el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
+  el.append(settingsRow('页边距', { valId: 'v-margin', value: MARGIN_LABELS[settings.margin] ?? '常规', onTap: () => pushSettingsPage(marginPage, '页边距') }))
+  el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
+  el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
+  el.append(settingsRow('阅读背景', { valId: 'v-theme', value: themeLabel(settings.theme), onTap: () => pushSettingsPage(themePage, '主题') }))
+  el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
+  el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
+    settings.autoContinue = v; saveSettings() // 进度续读由后端 BookReadingState 控制，此开关后续接线
+  }))
+  el.append(settingsSwitch('显示页码', 'set-page-num', v => {
+    settings.pageNum = v; saveSettings() // 页码显示依赖分页计数方案，见 PROJECT_STATUS TODO
+  }))
+  // 一键重置（危险操作，置底）
+  const reset = document.createElement('div')
+  reset.className = 'set-group-title'
+  reset.textContent = '· · ·'
+  el.append(reset)
+  el.append(settingsRow('恢复默认设置', { onTap: () => { if (confirm('确定恢复所有设置为默认吗？')) resetSettings() } }))
 })
+
+// 打开/关闭设置抽屉时同步控件到当前值
+const refreshSettingsUI = () => {
+  const set = id => document.getElementById(id)
+  if (set('set-page-anim')) set('set-page-anim').checked = settings.pageAnim
+  if (set('set-auto-continue')) set('set-auto-continue').checked = settings.autoContinue
+  if (set('set-page-num')) set('set-page-num').checked = settings.pageNum
+  if (set('set-orig')) set('set-orig').checked = settings.useOriginalStyle
+  if (set('set-cjk-sep')) set('set-cjk-sep').checked = settings.useCjkFont
+}
 
 // 打开/关闭设置抽屉（与目录抽屉互斥）
 const openSettings = () => {
   hideBars()
   closeTOC()
-  if (!settingsPages.length) pushSettingsPage(settingsTopPage, '设置')
+  // 每次打开都从顶层干净开始：清空历史栈，重新压栈顶层页。
+  // 避免上次关闭后残留的栈/active 状态导致重开落到子页或空白。
+  while (settingsPages.length) settingsPages.pop().classList.remove('active')
+  pushSettingsPage(settingsTopPage, '设置')
+  refreshSettingsUI()
+  refreshValueLabels()
   $('settings-wrap').classList.add('show')
 }
 const closeSettings = () => {
-  while (settingsPages.length > 1) settingsPages.pop().classList.remove('active')
+  while (settingsPages.length) settingsPages.pop().classList.remove('active')
   $('settings-wrap').classList.remove('show')
 }
 $('btn-settings-close').addEventListener('click', closeSettings)
@@ -823,8 +1318,10 @@ async function loadBook(path) {
 loadBook('/book/current.epub')
   .then(() => {
     log('book opened')
-    // 启用 foliate 翻页动画（平滑滑动 300ms）
-    view.renderer?.setAttribute?.('animated', '')
+    // 读取后端持久化的用户设置（无则默认套）并应用到渲染；getSettings 已是生效值，无需回写
+    const saved = bridgeGet('getSettings')
+    if (saved) settings = { ...defaultSettings, ...JSON.parse(saved) }
+    applySettings(false)
   })
   .catch(err => {
     console.error(err)

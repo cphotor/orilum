@@ -84,6 +84,8 @@ dependencies {
 
     // WebView 资源走 https 虚拟域，满足 ES Module / fetch
     implementation(libs.androidx.webkit)
+    // SAF 目录树遍历（指定字体目录导入）
+    implementation(libs.androidx.documentfile)
 
     // 单元测试
     testImplementation(libs.junit)
