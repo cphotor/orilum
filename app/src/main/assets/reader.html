@@ -413,6 +413,11 @@
     width: 100%; height: 34px; border-radius: 5px; border: 1px solid var(--ui-slab);
   }
   .preset-opt.sel { border-color: var(--ui-sel-border); background: var(--ui-sel-bg); color: var(--ui-sel-text); }
+  /* 顶层设置行右侧的颜色取值：色块方框（替代颜色代码文字） */
+  .set-row .set-swatch {
+    width: 28px; height: 18px; border-radius: 4px; border: 1px solid var(--ui-slab);
+    flex-shrink: 0; margin-right: 6px;
+  }
   /* 页边距 + 行距预设 */
   .opt-chips { display: flex; gap: 8px; padding: 8px 16px 16px; flex-wrap: wrap; }
   .opt-chip {
@@ -456,7 +461,12 @@
     flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 8px 10px; font-size: 14px; font-variant: tabular-nums;
     border: 1px solid var(--ui-card-border); border-radius: 6px; background: var(--ui-card-bg); color: var(--ui-text);
   }
-  .cp-swatch { width: 34px; align-self: stretch; border-radius: 6px; border: 1px solid var(--ui-slab); flex-shrink: 0; }
+  /* 取色器输入框左侧：圆角长方形，内部用字体色显示"正文"、背景填充当前前景色（用当前正文字体） */
+  .cp-swatch {
+    min-width: 60px; height: 30px; border-radius: 6px; border: 1px solid var(--ui-slab);
+    display: flex; align-items: center; justify-content: center; font-size: 13px;
+    flex-shrink: 0; box-sizing: content-box; line-height: 1;
+  }
 </style>
 </head>
 <body data-scheme="day">
@@ -745,11 +755,6 @@ const BG_PRESETS = [
   { value: '#dce6f2', label: '浅蓝' },
 ]
 const schemeLabel = key => SCHEMES[key]?.label ?? '白天'
-const bgLabel = v => {
-  if (!v) return '原书设置'
-  const p = BG_PRESETS.find(x => x.value === v)
-  return p ? p.label : v
-}
 /** 字体色覆盖预设：'' = 原书设置（动态取 scheme 默认文字色），其余为固定灰度 hex（仅黑↔白，不允许彩色）。 */
 const FG_PRESETS = [
   { value: '', label: '原书设置' },
@@ -760,11 +765,6 @@ const FG_PRESETS = [
 ]
 /** 实际生效的正文字色：夜间优先（夜间用整套浅色文字），白天才用独立覆盖色(fgOverride)。 */
 const effectiveFg = () => settings.scheme === 'night' ? scheme().text : (settings.fgOverride || scheme().text)
-const fgLabel = v => {
-  if (!v) return '原书设置'
-  const p = FG_PRESETS.find(x => x.value === v)
-  return p ? p.label : v
-}
 /** 页边距预设 -> iframe max-inline-size（控制行宽），单位 em */
 const MARGINS = { compact: '60em', normal: '720px', wide: '900px' }
 
@@ -943,6 +943,8 @@ const settingsBackBtn = $('btn-settings-back')
 const settingsPageHost = $('settings-pages')
 
 const pushSettingsPage = (el, title) => {
+  // 进入页面前刷新其状态（依赖 settings 的页，如颜色取色器，settings 为异步加载，需按生效值对齐）
+  if (el && typeof el.onEnter === 'function') el.onEnter()
   // 同一页元素（缓存复用，如 fontPickerPage / fontFacePage）可能被重复 push，导致
   // 页面栈里出现同一引用的多个层级、pop 后状态错乱、内容空白。先移除已存在的旧位，
   // 保证栈内元素唯一，再把该页切到栈顶激活。
@@ -979,13 +981,17 @@ const settingsPage = (title, build) => {
   settingsPageHost.append(el)
   return el
 }
-const settingsRow = (label, { value, valId, onTap } = {}) => {
+const settingsRow = (label, { value, valId, onTap, swatch } = {}) => {
   const div = document.createElement('div')
   div.className = 'set-row'
   div.innerHTML = `<span class="set-label">${label}</span>`
-  if (value !== undefined) {
-    // valId 供 refreshValueLabels() 更新可下钻行的取值；无 id 的下钻行也显示 chevron
-    div.insertAdjacentHTML('beforeend', `<span class="set-value"${valId ? ` id="${valId}"` : ''}>${value}</span>`)
+  if (value !== undefined || swatch) {
+    // valId 供 refreshValueLabels() 更新可下钻行的取值；swatch 渲染为色块方框（颜色代码文字换成色块）
+    if (swatch) {
+      div.insertAdjacentHTML('beforeend', `<span class="set-value set-swatch"${valId ? ` id="${valId}"` : ''}></span>`)
+    } else {
+      div.insertAdjacentHTML('beforeend', `<span class="set-value"${valId ? ` id="${valId}"` : ''}>${value}</span>`)
+    }
     div.insertAdjacentHTML('beforeend', '<span class="set-chevron">›</span>')
   }
   if (onTap) div.addEventListener('click', onTap)
@@ -1205,7 +1211,7 @@ const mkColorPicker = (initialHex, onChange) => {
     rEl.setValue(Math.round(rgb[0])); gEl.setValue(Math.round(rgb[1])); bEl.setValue(Math.round(rgb[2]))
     drawGradients()
     txtEl.value = '#' + hexC.toLowerCase()
-    swEl.style.background = '#' + hexC.toLowerCase()
+    swEl.style.background = '#' + hexC.toLowerCase(); swEl.style.color = effectiveFg()
     onChange('#' + hexC.toLowerCase())
   }
   // 仅把滑条/文本移到某个 hex（不做应用）
@@ -1214,7 +1220,7 @@ const mkColorPicker = (initialHex, onChange) => {
     hueEl.setValue(Math.round(hsl[0])); satEl.setValue(Math.round(hsl[1])); lightEl.setValue(Math.round(hsl[2]))
     rEl.setValue(Math.round(rgb[0])); gEl.setValue(Math.round(rgb[1])); bEl.setValue(Math.round(rgb[2]))
     drawGradients()
-    txtEl.value = '#' + hexC.toLowerCase(); swEl.style.background = '#' + hexC.toLowerCase()
+    txtEl.value = '#' + hexC.toLowerCase(); swEl.style.background = '#' + hexC.toLowerCase(); swEl.style.color = effectiveFg()
   }
   // 仅切换显示模式
   function applyMode() {
@@ -1233,7 +1239,7 @@ const mkColorPicker = (initialHex, onChange) => {
 
   const inputRow = document.createElement('div'); inputRow.className = 'cp-input-row'
   const txtEl = document.createElement('input'); txtEl.type = 'text'; txtEl.placeholder = '#2b2b2b 或 43,43,43'
-  const swEl = document.createElement('div'); swEl.className = 'cp-swatch'
+  const swEl = document.createElement('div'); swEl.className = 'cp-swatch'; swEl.textContent = '示例'
   txtEl.addEventListener('change', () => {
     const hex6 = parseColorInput(txtEl.value)
     if (hex6) { syncOnly(hex6); onChange('#' + hex6.toLowerCase()) }
@@ -1253,17 +1259,19 @@ const bgOverridePage = settingsPage('背景色', el => {
   const grid = document.createElement('div')
   grid.className = 'preset-grid'
   const picker = mkColorPicker(settings.bgOverride || scheme().bg, hex => {
-    settings.bgOverride = hex; applySettings(true); refreshValueLabels()
+    settings.bgOverride = hex
+    applySettings(true)
+    refreshValueLabels()
+    build() // 改色后刷新预设选中态：当前值不再等于某预设时，取消"原书设置"等的高亮
   })
   const build = () => {
     grid.replaceChildren()
-    // 预设色板：'原书设置' 的 swatch 取当前 scheme 默认背景，其余为固定 hex
+    // 预设色板：'原书设置' 用当前 scheme 默认背景，其余为固定 hex；每项以 色块+名称 展示
     BG_PRESETS.forEach(p => {
-      const swatchColor = p.value || scheme().bg
       const opt = document.createElement('button')
       opt.type = 'button'
       opt.className = 'preset-opt' + (settings.bgOverride === p.value ? ' sel' : '')
-      opt.innerHTML = `<span class="swatch" style="background:${swatchColor}"></span><span>${p.label}</span>`
+      opt.innerHTML = `<span class="swatch" style="background:${p.value || scheme().bg}"></span><span>${p.label}</span>`
       opt.addEventListener('click', () => {
         settings.bgOverride = p.value
         applySettings(true)
@@ -1274,6 +1282,8 @@ const bgOverridePage = settingsPage('背景色', el => {
       grid.append(opt)
     })
   }
+  // 进入页面时把预设选中态与取色器滑块/色块同步到当前 settings（settings 为异步加载，打开面板需按生效值刷新）
+  el.onEnter = () => { build(); picker.syncOnly((settings.bgOverride || scheme().bg).replace('#', '')) }
   build()
   el.append(grid)
   el.append(picker.el)
@@ -1315,7 +1325,7 @@ const mkGrayPicker = (initialHex, onChange) => {
 
   function paint() {
     const hex6 = grayHex(g)
-    txtEl.value = '#' + hex6.toLowerCase(); swEl.style.background = '#' + hex6.toLowerCase()
+    txtEl.value = '#' + hex6.toLowerCase(); swEl.style.background = effectiveBg(); swEl.style.color = '#' + hex6.toLowerCase()
     onChange('#' + hex6.toLowerCase())
   }
   function syncOnly(h) {
@@ -1324,12 +1334,12 @@ const mkGrayPicker = (initialHex, onChange) => {
     else { g = 43; txtEl.value = '' }
     setThumb()
     const hex6 = grayHex(g)
-    txtEl.value = '#' + hex6.toLowerCase(); swEl.style.background = '#' + hex6.toLowerCase()
+    txtEl.value = '#' + hex6.toLowerCase(); swEl.style.background = effectiveBg(); swEl.style.color = '#' + hex6.toLowerCase()
   }
 
   const inputRow = document.createElement('div'); inputRow.className = 'cp-input-row'
   const txtEl = document.createElement('input'); txtEl.type = 'text'; txtEl.placeholder = '#2b2b2b 或 43,43,43'
-  const swEl = document.createElement('div'); swEl.className = 'cp-swatch'
+  const swEl = document.createElement('div'); swEl.className = 'cp-swatch'; swEl.textContent = '示例'
   txtEl.addEventListener('change', () => {
     const s = (txtEl.value || '').trim()
     let v = null
@@ -1353,17 +1363,19 @@ const fgOverridePage = settingsPage('字体色', el => {
   const grid = document.createElement('div')
   grid.className = 'preset-grid'
   const picker = mkGrayPicker(settings.fgOverride || effectiveFg(), hex => {
-    settings.fgOverride = hex; applySettings(true); refreshValueLabels()
+    settings.fgOverride = hex
+    applySettings(true)
+    refreshValueLabels()
+    build() // 改色后刷新预设选中态：当前值不再等于某预设时，取消"原书设置"等的高亮
   })
   const build = () => {
     grid.replaceChildren()
-    // 预设色板：'原书设置' 的 swatch 取当前 scheme 默认文字色，其余为固定灰度
+    // 预设色板：'原书设置' 用当前 scheme 默认字色，其余为固定灰度；每项以 色块+名称 展示
     FG_PRESETS.forEach(p => {
-      const swatchColor = p.value || effectiveFg()
       const opt = document.createElement('button')
       opt.type = 'button'
       opt.className = 'preset-opt' + (settings.fgOverride === p.value ? ' sel' : '')
-      opt.innerHTML = `<span class="swatch" style="background:${swatchColor}"></span><span>${p.label}</span>`
+      opt.innerHTML = `<span class="swatch" style="background:${p.value || effectiveFg()}"></span><span>${p.label}</span>`
       opt.addEventListener('click', () => {
         settings.fgOverride = p.value
         applySettings(true)
@@ -1374,6 +1386,8 @@ const fgOverridePage = settingsPage('字体色', el => {
       grid.append(opt)
     })
   }
+  // 进入页面时把预设选中态与取色器滑块/色块同步到当前 settings（settings 为异步加载，打开面板需按生效值刷新）
+  el.onEnter = () => { build(); picker.syncOnly((settings.fgOverride || effectiveFg()).replace('#', '')) }
   build()
   el.append(grid)
   el.append(picker.el)
@@ -1517,8 +1531,10 @@ const refreshValueLabels = () => {
   v('v-font-size', fontRatioLabel(settings.fontScale))
   v('v-line-spacing', `×${Number(settings.lineSpacing).toFixed(1)}`)
   v('v-margin', MARGIN_LABELS[settings.margin] ?? '常规')
-  v('v-bg', bgLabel(settings.bgOverride))
-  v('v-fg', fgLabel(settings.fgOverride))
+  // 字体色/背景色顶层用色块方框显示当前实际颜色（夜间优先后的生效值）
+  const swatch = (id, color) => { const el = document.getElementById(id); if (el) el.style.background = color }
+  swatch('v-bg', effectiveBg())
+  swatch('v-fg', effectiveFg())
   v('v-layout-theme', layoutThemeLabel(settings.layoutTheme))
   v('v-font-face', settings.useOriginalStyle ? '跟随原书' : '自定义')
   // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
@@ -1538,8 +1554,8 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('页边距', { valId: 'v-margin', value: MARGIN_LABELS[settings.margin] ?? '常规', onTap: () => pushSettingsPage(marginPage, '页边距') }))
   el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
-  el.append(settingsRow('字体色', { valId: 'v-fg', value: fgLabel(settings.fgOverride), onTap: () => pushSettingsPage(fgOverridePage, '字体色') }))
-  el.append(settingsRow('背景色', { valId: 'v-bg', value: bgLabel(settings.bgOverride), onTap: () => pushSettingsPage(bgOverridePage, '背景色') }))
+  el.append(settingsRow('字体色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '字体色') }))
+  el.append(settingsRow('背景色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
   el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 进度续读由后端 BookReadingState 控制，此开关后续接线
