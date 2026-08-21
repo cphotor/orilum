@@ -1025,8 +1025,12 @@ const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
   const setVal = v => { input.value = v; valEl.textContent = fmt ? fmt(v) : v }
   minus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) - step)); onInput?.(parseFloat(input.value)) })
   plus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) + step)); onInput?.(parseFloat(input.value)) })
-  input.addEventListener('input', () => { valEl.textContent = fmt ? fmt(input.value) : input.value })
-  input.addEventListener('change', () => onInput?.(parseFloat(input.value)))
+  // input 事件在拖动过程中持续触发 → 与取色器滑块一致的即时刷新（不再是松手才生效）
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value)
+    valEl.textContent = fmt ? fmt(v) : v
+    onInput?.(v)
+  })
   return div
 }
 
@@ -1061,10 +1065,6 @@ const fontSizePage = settingsPage('字号', el => {
     min: 0, max: 100, step: 1, val: settings.fontScale, fmt: v => fontRatioLabel(v),
     onInput: v => { settings.fontScale = v; applySettings(true); refreshValueLabels() },
   }))
-  const tip = document.createElement('div')
-  tip.className = 'set-group-title'
-  tip.textContent = '50 = 默认；往右放大、往左缩小的整体缩放'
-  el.append(tip)
 })
 // 行距页
 const lineSpacingPage = settingsPage('行距', el => {
