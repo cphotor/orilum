@@ -852,7 +852,8 @@ const buildReadingCSS = () => {
   if (!useOriginalStyle) {
     const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
     css.push(`html { font-size: ${bodyPx.toFixed(1)}px; }`)
-    css.push(`body { line-height: ${lineSpacing}; }`)
+    // 行距：除了 body，段落/标题等也一并应用，避免被原书更具体选择器（如 p{line-height}）覆盖导致无效
+    css.push(`html, body, p, li, blockquote, h1, h2, h3, h4, h5, h6 { line-height: ${lineSpacing}; }`)
     // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
     // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
     const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
