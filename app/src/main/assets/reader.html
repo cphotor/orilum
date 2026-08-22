@@ -94,6 +94,8 @@
   /* 顶/底部工具栏 */
   /* 工具栏：永不切 display，靠 visibility(动画结束后隐藏)+transform 从屏幕边缘滑入/滑出。
      容器 pointer-events:none 透传到翻页区；top 栏下滑、bottom 栏上滑。 */
+  /* --bars-anim：工具栏滑入/滑出时长。需与系统状态栏显隐动画(约0.20~0.24s)对齐，
+     使标题栏与系统状态栏同帧开始、同帧结束，视觉上合成一体、无前后错位的异步感。 */
   #bars {
     position: fixed;
     inset: 0;
@@ -102,7 +104,7 @@
     visibility: visible;
     transition: visibility 0s; /* 展开立即可见，开始滑入 */
   }
-  #bars.hidden { visibility: hidden; transition: visibility 0s linear 0.32s; } /* 滑出动画跑完再隐藏 */
+  #bars.hidden { visibility: hidden; transition: visibility 0s linear var(--bars-anim, 0.24s); } /* 滑出动画跑完再隐藏 */
   #bars .bar {
     position: absolute;
     left: 0; right: 0;
@@ -112,7 +114,7 @@
     align-items: center;
     padding: 0 16px;
     box-sizing: border-box;
-    transition: transform 0.32s ease, opacity 0.32s ease;
+    transition: transform var(--bars-anim, 0.24s) ease, opacity var(--bars-anim, 0.24s) ease;
   }
   #bar-top {
     top: 0; /* 标题栏贴住屏幕顶；内容高度/上下 padding 由 JS 按状态栏高度内联写入，避开自定义属性的继承歧义 */
