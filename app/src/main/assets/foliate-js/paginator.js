@@ -873,10 +873,21 @@ export class Paginator extends HTMLElement {
 
         this.#scrollToPage(page, 'snap').then(() => {
             const dir = page <= 0 ? -1 : page >= pages - 1 ? 1 : null
-            if (dir) return this.#goTo({
-                index: this.#adjacentIndex(dir),
-                anchor: dir < 0 ? () => 1 : () => 0,
-            })
+            if (dir) {
+                // 目标是相邻章节（前/后一节的末尾/开头）。若该方向没有相邻章节
+                // （已在全书首/尾、无上一节/下一节），#goTo 传入 null 会让 sections[null] 抛错，
+                // #display 跳过、滚轮停在正文与空白缓冲页之间的「两页中间」。
+                // 此时不跳章节，改为吸附回当前有效内容页边界。
+                const target = this.#adjacentIndex(dir)
+                if (target == null) {
+                    const safePage = dir < 0 ? 1 : pages - 2
+                    return safePage === page ? undefined : this.#scrollToPage(safePage, 'snap')
+                }
+                return this.#goTo({
+                    index: target,
+                    anchor: dir < 0 ? () => 1 : () => 0,
+                })
+            }
         })
     }
     #onTouchStart(e) {

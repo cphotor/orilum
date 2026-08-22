@@ -2194,9 +2194,11 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
-  // 亮度手势已激活：仅变更亮度，不做任何翻页/吸附
-  if (touch.brightGesture) {
-    if (touch.lastBright !== null) saveSettings()
+  // 亮度手势已激活且确实调节了亮度：仅保存亮度，不做翻页/吸附。
+  // 注意：边缘区域被判为亮度手势、但实际是水平滑动时（未触发亮度，lastBright 仍为 null），
+  // 绝不能提前 return，否则缺少 snap/next/prev，小幅滑会卡在“两页之间”无法吸附。
+  if (touch.brightGesture && touch.lastBright !== null) {
+    saveSettings()
     return
   }
   const r = view.renderer
