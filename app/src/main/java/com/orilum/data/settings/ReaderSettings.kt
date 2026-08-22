@@ -55,6 +55,22 @@ data class ReaderSettings(
     val fgOverride: String = "",
     /** 【样式系统】排版主题：original（原书设置）| modern（现代）| traditional（传统）。 */
     val layoutTheme: String = "original",
+    /** 阅读器亮度档位 -50..100：100=跟随系统；0..100 写系统亮度物理背光；-50..0 系统最暗再叠遮罩压暗。 */
+    val brightness: Int = 100,
+    /** 跟随系统亮度开关；开 → 禁用「亮度」档位滑块，改由 [brightnessOffset] 围绕系统亮度微调。 */
+    val brightnessFollowSystem: Boolean = true,
+    /** 跟随系统时围绕系统亮度的偏移 -20..20（0 = 完全跟随系统不调整）。 */
+    val brightnessOffset: Int = 0,
+    /** 护眼开关：降低蓝光（叠加暖色遮罩）。 */
+    val eyeProtection: Boolean = false,
+    /** 蓝光过滤量 0..100（暖色遮罩透明度比例）。 */
+    val eyeProtectionLevel: Int = 40,
+    /** 亮度手势（可多选，均仅非跟随系统时生效）：
+     *  [brightnessGestureLeft] 屏幕左侧单指上下滑 | [brightnessGestureRight] 屏幕右侧单指上下滑 |
+     *  [brightnessGestureTwo] 任意区域双指上下滑。 */
+    val brightnessGestureLeft: Boolean = false,
+    val brightnessGestureRight: Boolean = false,
+    val brightnessGestureTwo: Boolean = false,
 ) {
 
     /** 序列化为 JSON 字符串（== [org.json.JSONObject.toString]）。 */
@@ -84,6 +100,14 @@ data class ReaderSettings(
         put("bgOverride", bgOverride)
         put("fgOverride", fgOverride)
         put("layoutTheme", layoutTheme)
+        put("brightness", brightness)
+        put("brightnessFollowSystem", brightnessFollowSystem)
+        put("brightnessOffset", brightnessOffset)
+        put("eyeProtection", eyeProtection)
+        put("eyeProtectionLevel", eyeProtectionLevel)
+        put("brightnessGestureLeft", brightnessGestureLeft)
+        put("brightnessGestureRight", brightnessGestureRight)
+        put("brightnessGestureTwo", brightnessGestureTwo)
     }
 
     companion object {
@@ -182,6 +206,14 @@ data class ReaderSettings(
                     bgOverride = bgOverride,
                     fgOverride = o.optString("fgOverride", d.fgOverride),
                     layoutTheme = o.optString("layoutTheme", d.layoutTheme),
+                    brightness = o.optInt("brightness", d.brightness),
+                    brightnessFollowSystem = o.optBoolean("brightnessFollowSystem", d.brightnessFollowSystem),
+                    brightnessOffset = o.optInt("brightnessOffset", d.brightnessOffset),
+                    eyeProtection = o.optBoolean("eyeProtection", d.eyeProtection),
+                    eyeProtectionLevel = o.optInt("eyeProtectionLevel", d.eyeProtectionLevel),
+                    brightnessGestureLeft = o.optBoolean("brightnessGestureLeft", d.brightnessGestureLeft),
+                    brightnessGestureRight = o.optBoolean("brightnessGestureRight", d.brightnessGestureRight),
+                    brightnessGestureTwo = o.optBoolean("brightnessGestureTwo", d.brightnessGestureTwo),
                 )
             } catch (_: Exception) {
                 DEFAULT

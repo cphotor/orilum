@@ -5,6 +5,10 @@
     <!-- 通过 SAF 访问用户选择的 EPUB，无需存储读写权限 -->
     <!-- <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" /> -->
 
+    <!-- 亮度调节：写系统亮度(Settings.System.SCREEN_BRIGHTNESS)控制物理背光，可越过系统当前值调亮；
+         vivo 安装时会一次性出现在权限列表供勾选，属特殊权限，运行期若未授予则回退窗口级亮度。 -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+
     <application
         android:allowBackup="true"
         android:supportsRtl="true"

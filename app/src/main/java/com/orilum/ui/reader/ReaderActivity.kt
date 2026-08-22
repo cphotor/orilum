@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -299,6 +300,8 @@ class ReaderActivity : ComponentActivity() {
                 { exitImmersiveAndPickFontDir() },
                 { finish() },
                 bottomInset(),
+                { applyBrightness(it) },
+                { applyOffsetBrightness(it) },
             ),
             "EPUBBridge",
         )
@@ -333,10 +336,115 @@ class ReaderActivity : ComponentActivity() {
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
     }
 
+    // ---- 系统级亮度（写 Settings.System.SCREEN_BRIGHTNESS，真正控制物理背光，可调亮）----
+
+    /** 进入阅读器时的原系统亮度(0..max)与亮度模式，供退出/跟随时还原。 */
+    private var origBrightness: Int = -1
+
+    private var origBrightnessMode: Int = -1
+
+    /** 设备背光合法上限：优先读系统资源配置，否则按官方 0..255 处理。 */
+    private val maxBrightness: Int by lazy {
+        val id = resources.getIdentifier("config_screenBrightnessSettingMaximum", "integer", "android")
+        if (id > 0) resources.getInteger(id) else 255
+    }
+
+    /** 进入阅读器首次改动亮度前，缓存原系统亮度与模式，保证退出能还原。 */
+    private fun rememberSystemBrightness() {
+        if (origBrightness < 0) {
+            origBrightness = Settings.System.getInt(
+                contentResolver, Settings.System.SCREEN_BRIGHTNESS, 255,
+            )
+        }
+        if (origBrightnessMode < 0) {
+            origBrightnessMode = Settings.System.getInt(
+                contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, -1,
+            )
+        }
+    }
+
+    /** 还原进入前的系统亮度与亮度模式（完全跟随系统/退出阅读器时调用）。 */
+    private fun restoreSystemBrightness() {
+        if (origBrightness >= 0) {
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, origBrightness)
+        }
+        if (origBrightnessMode >= 0) {
+            Settings.System.putInt(
+                contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS_MODE,
+                origBrightnessMode,
+            )
+        }
+    }
+
+    /**
+     * 应用阅读器亮度档位（-50..100，与前端「亮度」滑块/手势一致）。
+     *  - 0..100 → 写系统亮度 v/100*max（先切手动模式）→ 控制物理背光，可突破系统当前亮度调亮，也能调暗。
+     *  - -50..-1 → 系统亮度钉 0，余下压暗交给前端黑色遮罩（突破设备最暗下限）。
+     * 若 WRITE_SETTINGS 未授权，回退窗口级亮度保证至少能调暗。
+     */
+    private fun applyBrightness(value: Int) {
+        val v = value.coerceIn(-50, 100)
+        rememberSystemBrightness()
+        // 未授权改系统设置：回退窗口级亮度（只能调暗，够用且免授权）
+        if (!Settings.System.canWrite(this)) {
+            setWindowBrightness(if (v < 0) 0f else v / 100f)
+            return
+        }
+        // 先手动模式再写亮度；自动模式下写入会被环境光策略覆盖甚至忽略
+        Settings.System.putInt(
+            contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+        )
+        val target = if (v < 0) 0 else
+            Math.round(v / 100f * maxBrightness).toInt().coerceIn(0, maxBrightness)
+        Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, target)
+    }
+
+    /**
+     * 跟随系统时的「亮度偏移」（-20..20）。
+     *  - >0 增亮：真正写系统亮度（物理背光）在上限内按每单位 +max/100 提升——白纱只会发白不增亮。
+     *  - <=0 还原：负偏移压暗交给前端黑色遮罩；0 为完全跟随系统。回到进入前系统亮度/模式。
+     */
+    private fun applyOffsetBrightness(offset: Int) {
+        val o = offset.coerceIn(-20, 20)
+        rememberSystemBrightness()
+        // 未授权改系统设置：正偏移无法真正增亮，直接放弃（保持跟跟随/遮罩原样）
+        if (!Settings.System.canWrite(this)) return
+        if (o <= 0) {
+            restoreSystemBrightness()
+            return
+        }
+        // 正偏移：以进入前系统亮度为基准，每 1 单位提升 max/100；先切手动再写亮度
+        val base =
+            if (origBrightness >= 0) origBrightness
+            else Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 0)
+        Settings.System.putInt(
+            contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
+        )
+        val target = (base + o * maxBrightness.toDouble() / 100.0)
+            .toInt().coerceIn(0, maxBrightness)
+        Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, target)
+    }
+
+    /** 仅作为「未授予 WRITE_SETTINGS」时的窗口级亮度回退方案。 */
+    private fun setWindowBrightness(level: Float) {
+        val attrs = window.attributes
+        attrs.screenBrightness = level
+        window.attributes = attrs
+    }
+
     /** SAF 目录选择器关闭（确认/取消）后回到阅读器时恢复沉浸式。 */
     override fun onResume() {
         super.onResume()
         reapplyImmersive()
+    }
+
+    override fun onDestroy() {
+        // 退出阅读器时把系统亮度/模式还原为进入前状态，避免改动残留
+        restoreSystemBrightness()
+        super.onDestroy()
     }
 
     override fun onBackPressed() {
@@ -354,6 +462,8 @@ class EPUBBridge(
     private val pickFontDirectory: () -> Unit,
     private val exit: () -> Unit,
     private val bottomInset: Int,
+    private val applyBrightness: (Int) -> Unit,
+    private val applySystemBrightnessOffset: (Int) -> Unit,
 ) {
 
     /** foliate 每次 relocate 回调：携带 `JSON.stringify(view.lastLocation)`。 */
@@ -410,6 +520,14 @@ class EPUBBridge(
     /** 顶部「返回书架」：正常退出阅读器（不触发任何翻页）。 */
     @JavascriptInterface
     fun back() = exit()
+
+    /** 应用阅读器亮度档位（-50..100）：0..100 可根据系统授权写系统亮度、<0 窗口最暗由前端遮罩叠加。跟随系统走 [setSystemBrightnessOffset]。 */
+    @JavascriptInterface
+    fun setBrightness(value: Int) = applyBrightness(value)
+
+    /** 「跟随系统亮度 + 偏移」：offset -20..20，围绕系统亮度在窗内微调（0 = 完全跟随）。 */
+    @JavascriptInterface
+    fun setSystemBrightnessOffset(offset: Int) = applySystemBrightnessOffset(offset)
 
     @JavascriptInterface
     fun log(msg: String) = FileLogger.d("Orilum.js", msg)

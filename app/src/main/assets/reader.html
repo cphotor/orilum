@@ -53,6 +53,33 @@
     display: block;
     padding: 24px 32px;
   }
+  /* 亮度压暗遮罩：盖住正文但不挡点击(pointer-events:none)，且低于工具栏/目录/设置(需可操作) */
+  #brightness-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 6;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* 偏移增亮白色遮罩：在系统/自动亮度之上轻微提亮（系统亮度受限时正偏移用白色纱） */
+  #brighten-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 6;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* 护眼（降蓝光）暖色遮罩：盖住正文，暖橙半透明按蓝光过滤量调整透明度 */
+  #eye-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 6;
+    background: #ffb84d;
+    opacity: 0;
+    pointer-events: none;
+  }
   /* 三区点击：左=上一页，右=下一页，中=切换工具栏 */
   .zone {
     position: absolute;
@@ -420,12 +447,16 @@
     background: #c8a15a; pointer-events: none; max-width: 100%;
   }
   .slider-track .st-thumb {
-    position: absolute; top: 50%; width: 26px; height: 26px; margin-left: -13px;
+    position: absolute; top: 50%; width: 30px; height: 30px; margin-left: -15px;
     transform: translateY(-50%); border-radius: 50%; background: #fff;
     border: 1px solid rgba(120, 120, 120, 0.5); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
     pointer-events: none;
   }
   .slider-val { font-size: 13px; color: var(--ui-muted2); min-width: 34px; text-align: right; flex-shrink: 0; }
+  /* 关联禁用：跟随系统时禁亮度挡位、非跟随禁偏移等 → 整行置灰并阻断交互 */
+  .set-row.disabled { opacity: 0.45; pointer-events: none; }
+  /* 设置页内分组小标题（如「亮度手势」） */
+  .set-group-title { padding: 12px 20px 0; font-size: 12px; color: var(--ui-muted); letter-spacing: 0.5px; }
   /* 主题/预设选项（网格按钮） */
   .preset-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
@@ -498,6 +529,13 @@
 </head>
 <body data-scheme="day">
 <foliate-view id="view"></foliate-view>
+
+<!-- 亮度压暗遮罩：遮罩叠加在实时系统亮度之上（跟随自动），用于压暗 -->
+<div id="brightness-mask"></div>
+<!-- 偏移增亮白色遮罩：叠加照明（系统受控时亮度不能超上限，用白色纱轻微提亮） -->
+<div id="brighten-mask"></div>
+<!-- 护眼暖色遮罩：开启护眼按「蓝光过滤量」叠加暖橙，降低蓝光 -->
+<div id="eye-mask"></div>
 
 <div id="zone-l" class="zone"></div>
 <div id="zone-m" class="zone"></div>
@@ -758,6 +796,15 @@ const defaultSettings = {
   // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
   layoutTheme: 'original',
   pageAnim: true, autoContinue: true, pageNum: false,
+  brightness: 100,              // 亮度档位（非跟随时）：-50..100；0..100 写系统亮度物理背光，-50..0 系统最暗再叠遮罩压暗
+  brightnessFollowSystem: true, // 跟随系统亮度：开 → 亮度档位滑块禁用，改用偏移微调
+  brightnessOffset: 0,          // 跟随系统时的亮度偏移 -20..20（0 = 完全跟随不调整）
+  eyeProtection: false,         // 护眼：降低蓝光（叠加暖色遮罩）
+  eyeProtectionLevel: 40,       // 蓝光过滤量 0..100（暖色遮罩透明度比例）
+  // 亮度手势（可多选，仅非跟随系统时生效）：
+  brightnessGestureLeft: false,  // 屏幕左侧单指上下滑
+  brightnessGestureRight: false, // 屏幕右侧单指上下滑
+  brightnessGestureTwo: false,   // 任意区域双指上下滑
 }
 let settings = { ...defaultSettings }
 
@@ -1079,7 +1126,65 @@ const applySettings = (persist = true) => {
   document.body.style.background = effectiveBg()
   document.documentElement.style.color = effectiveFg()
   document.body.style.color = effectiveFg()
+  // 亮度/护眼：跟随系统走偏移、否则走亮度档位，护眼独立叠加暖色遮罩；仅状态变化不必整页重排
+  applyBrightnessState()
   if (persist) saveSettings()
+}
+
+/** 应用亮度档位到「系统亮度(Android，写 Settings.System) + 前端遮罩」：
+ *  - 100   跟随系统（桥接层置空/还原），遮罩 0；
+ *  - 0..99 原生写系统亮度 v/100（控制物理背光，可突破系统当前值调亮）；遮罩 0；
+ *  - <0    原生系统亮度钉 0，遮罩 opacity = min(0.9, -v/50)：-50 最黑 ≈0.9。
+ *  返回是否遮挡（<0 无遮罩 false / 有遮罩 true），供外层断言语义。 */
+const brightnessMaskEl = $('brightness-mask')
+const applyBrightnessEffect = b => {
+  const v = num(b, 100)
+  const under = v < 0
+  if (brightnessMaskEl) brightnessMaskEl.style.opacity = under
+    ? Math.max(0.02, Math.min(0.9, -v / 50)) : 0
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.setBrightness) {
+    EPUBBridge.setBrightness(Math.round(v))
+  }
+}
+
+// 护眼暖色遮罩：开启按「蓝光过滤量」叠加暖橙、关闭清零；透明度随档位 0..0.7（需明显可见）
+const eyeMaskEl = $('eye-mask')
+const brightenMaskEl = $('brighten-mask')
+const applyEyeProtection = () => {
+  if (!eyeMaskEl) return
+  const on = !!settings.eyeProtection
+  eyeMaskEl.style.opacity = on
+    ? Math.min(0.7, (num(settings.eyeProtectionLevel, 40) / 100) * 0.7) : 0
+}
+
+/** 跟随系统时的亮度偏移：正偏移由原生写系统亮度真正增亮；负偏移/零用遮罩压暗或完全跟随。
+ *  - >0 增亮 交给原生(applyOffsetBrightness)写系统亮度物理背光；白纱不再用于增亮。
+ *  - <0 压暗  黑色遮罩：opacity = min(0.55, |v|/20 * 0.55)。
+ *  - 0       无遮罩（完全跟随系统）。 */
+const applyOffsetMask = () => {
+  const o = Math.min(20, Math.max(-20, (settings.brightnessOffset | 0) || 0))
+  if (brightnessMaskEl) brightnessMaskEl.style.opacity = o < 0
+    ? Math.min(0.55, (-o / 20) * 0.55) : 0
+  // 正偏移不叠白纱：增亮由原生(写系统亮度)实现，白纱只会发白发灰不能真正变亮
+  if (brightenMaskEl) brightenMaskEl.style.opacity = 0
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.setSystemBrightnessOffset) {
+    EPUBBridge.setSystemBrightnessOffset(o)
+  }
+}
+
+/** 汇总应用「亮度/护眼」状态：跟随系统 → 正偏移写系统亮度增亮、负偏移黑纱压暗；否则走亮度档位；护眼独立叠加。
+ * 仅亮度/护眼相关变化时调用，不必整页重排。 */
+const applyBrightnessState = () => {
+  if (settings.brightnessFollowSystem) {
+    applyOffsetMask()
+    // 正偏移由原生写系统亮度增亮；offset<=0 时原生还原回进入前系统亮度/模式（0=完全跟随）
+    if (typeof EPUBBridge !== 'undefined' && EPUBBridge.setSystemBrightnessOffset) {
+      EPUBBridge.setSystemBrightnessOffset(settings.brightnessOffset | 0)
+    }
+  } else {
+    applyBrightnessEffect(num(settings.brightness, 100))
+  }
+  applyEyeProtection()
 }
 
 // 回写当前 settings 到后端（整份覆盖）
@@ -1200,17 +1305,31 @@ const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
     onInput?.(trackEl._v)
   }
   let dragging = false
-  trackEl.addEventListener('pointerdown', e => {
+  // disabled：置灰并忽略所有交互（配合「跟随系统/护眼」等联动禁用次滑块）。
+  let disabled = false
+  const setDisabled = on => {
+    disabled = !!on
+    div.classList.toggle('disabled', disabled)
+  }
+  const guard = () => disabled
+  // 按下定位/开始拖动。绑定到整个控制行（而非仅轨道），使拖柄在两端探出轨道的一半也能被抓住；
+  // 但跳过 −/＋ 按钮（它们有自己的点击逻辑），数值文本区不可拖。
+  const start = e => {
+    if (guard()) return
+    if (e.target.closest('.slider-btn') || e.target.closest('.slider-val')) return
     dragging = true
-    if (trackEl.setPointerCapture) trackEl.setPointerCapture(e.pointerId)
+    if (controlsEl.setPointerCapture) controlsEl.setPointerCapture(e.pointerId)
     moveFrom(e); e.preventDefault()
-  })
-  trackEl.addEventListener('pointermove', e => { if (dragging) moveFrom(e) })
+  }
+  const controlsEl = div.querySelector('.slider-controls')
+  controlsEl.addEventListener('pointerdown', start)
+  controlsEl.addEventListener('pointermove', e => { if (!guard() && dragging) moveFrom(e) })
   const end = () => { dragging = false }
-  trackEl.addEventListener('pointerup', end); trackEl.addEventListener('pointercancel', end)
+  controlsEl.addEventListener('pointerup', end); controlsEl.addEventListener('pointercancel', end)
   // sync(v)：外部在打开页面时用当前保存值重设滑块位置与数值。
   // settings 为异步加载，页内控件在模块加载期仅拿到默认值，需在进入页面时对齐真实保存值。
   div.sync = setVal
+  div.setDisabled = setDisabled
   return div
 }
 
@@ -1270,6 +1389,66 @@ const marginPage = settingsPage('页边距', el => {
   mk('右边距', 'marginRight', 0, 200)
   // 打开页面时按当前保存值对齐四个滑块（复用每行 sync）
   el.onEnter = () => rows.forEach((row, i) => row.sync?.(settings[keys[i]]))
+})
+// 亮度页：跟随系统开关 + 偏移(-20..20) + 亮度档位(-50..100) + 护眼 + 蓝光过滤量 + 亮度手势(三个独立开关，可多选)。
+// 拖动只更新状态，经 applyBrightnessState 轻量应用到窗口/遮罩，不整页重排。
+const brightnessLabel = v => v < 0 ? `${Math.round(v)}` : `${Math.round(v)}%`
+const brightnessSummary = () => settings.brightnessFollowSystem
+  ? `跟随${settings.brightnessOffset ? (settings.brightnessOffset > 0 ? '+' : '') + settings.brightnessOffset : ''}`
+  : brightnessLabel(settings.brightness)
+const brightnessPage = settingsPage('亮度', el => {
+  const follow = settingsSwitch('跟随系统', 'bri-follow', v => {
+    settings.brightnessFollowSystem = v
+    briSlider.setDisabled(v)
+    offsetSlider.setDisabled(!v)
+    gestureSwitches.forEach(sw => sw.classList.toggle('disabled', v))
+    applyBrightnessState(); saveSettings(); refreshValueLabels()
+  })
+  const offsetSlider = sliderRow('亮度偏移', {
+    min: -20, max: 20, step: 1, val: num(settings.brightnessOffset, 0),
+    fmt: v => v > 0 ? `+${Math.round(v)}` : `${Math.round(v)}`,
+    onInput: v => { settings.brightnessOffset = Math.round(v); applyBrightnessState(); refreshValueLabels() },
+  })
+  const briSlider = sliderRow('亮度', {
+    min: -50, max: 100, step: 1, val: num(settings.brightness, 100), fmt: brightnessLabel,
+    onInput: v => { settings.brightness = Math.round(v); applyBrightnessEffect(settings.brightness); refreshValueLabels() },
+  })
+  const eye = settingsSwitch('护眼', 'bri-eye', v => {
+    settings.eyeProtection = v
+    eyeLevelSlider.setDisabled(!v)
+    applyBrightnessState(); saveSettings()
+  })
+  const eyeLevelSlider = sliderRow('蓝光过滤量', {
+    min: 0, max: 100, step: 1, val: num(settings.eyeProtectionLevel, 40),
+    fmt: v => `${Math.round(v)}%`,
+    onInput: v => { settings.eyeProtectionLevel = Math.round(v); applyBrightnessState() },
+  })
+  // 亮度手势：三个独立开关，可任意多选；跟随系统时全部置灰禁用（判定逻辑见 resolveBrightGesture 的 gating）。
+  const gestureTitle = document.createElement('div')
+  gestureTitle.className = 'set-group-title'
+  gestureTitle.textContent = '亮度手势'
+  const gestureDefs = [
+    ['bri-g-L', '屏幕左侧 单指上下滑 调节亮度', 'brightnessGestureLeft'],
+    ['bri-g-R', '屏幕右侧 单指上下滑 调节亮度', 'brightnessGestureRight'],
+    ['bri-g-2', '任意区域 双指上下滑 调节亮度', 'brightnessGestureTwo'],
+  ]
+  const gestureSwitches = gestureDefs.map(([id, label, key]) =>
+    settingsSwitch(label, id, v => { settings[key] = v; saveSettings() }))
+  el.append(follow, offsetSlider, briSlider, eye, eyeLevelSlider, gestureTitle, ...gestureSwitches)
+  el.onEnter = () => {
+    follow.querySelector('input').checked = !!settings.brightnessFollowSystem
+    offsetSlider.sync(settings.brightnessOffset)
+    briSlider.sync(settings.brightness)
+    eye.querySelector('input').checked = !!settings.eyeProtection
+    eyeLevelSlider.sync(settings.eyeProtectionLevel)
+    gestureSwitches.forEach((s, i) => s.querySelector('input').checked = !!settings[gestureDefs[i][2]])
+    // 联动禁用：跟随系统 → 禁亮度档位、禁手势、开偏移；否则相反；护眼关 → 禁蓝光过滤量
+    const fs = !!settings.brightnessFollowSystem
+    briSlider.setDisabled(fs)
+    offsetSlider.setDisabled(!fs)
+    gestureSwitches.forEach(sw => sw.classList.toggle('disabled', fs))
+    eyeLevelSlider.setDisabled(!settings.eyeProtection)
+  }
 })
 // 通用取色器：RGB / HSL 双模式滑条 + RGB 输入（hex / 十进制）。
 // initialHex: 打开时的当前色（6 位 hex，可含 #）；onChange(hex6): 颜色变化时回调（含 #，含用户拖动/输入）。
@@ -1723,6 +1902,7 @@ const refreshValueLabels = () => {
   swatch('v-fg', effectiveFg())
   v('v-layout-theme', layoutThemeLabel(settings.layoutTheme))
   v('v-font-face', '自定义')
+  v('v-brightness', brightnessSummary())
   // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
   FONT_KEYS.forEach(([key]) => {
     if (settings.useCjkFont && settings[key + 'Cjk']) {
@@ -1743,6 +1923,7 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('字体', { valId: 'v-font-face', value: '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('文字颜色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '文字颜色') }))
   el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
+  el.append(settingsRow('亮度', { valId: 'v-brightness', value: brightnessSummary(), onTap: () => pushSettingsPage(brightnessPage, '亮度') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
   el.append(settingsSwitch('启动时继续阅读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 开启后，下次启动 app 直接进入上次阅读的书（定位恢复始终默认生效）
@@ -1829,18 +2010,34 @@ seekEl.addEventListener('change', commitSeek)
 // 位移过小则 snap() 吸附回当前页。
 // TODO(settings): 翻页动画（滑动/无）需要一个后台开关，暂未实现，先默认滑动。
 const SWIPE_LIMIT = 48 // 触发翻页的最小水平位移(px)
+const EDGE_WIDTH = 0.15 // 屏幕左/右缘占比：此宽度内单指上下滑 = 调亮度（与翻页横滑方向正交、互不冲突）
+const BRIGHT_RANGE = 150 // 亮度档位总跨度（-50..100），全屏上/下滑约映射满量程
 let touch = { startX: 0, startY: 0, time: 0, dx: 0, lastX: 0, lastY: 0, vx: 0, vy: 0, active: false }
+
+// 解析本次触控是否为「亮度手势」：跟随系统开启时禁用；否则按三个亮度手势开关匹配（可多选）。
+function resolveBrightGesture(touches) {
+  if (settings.brightnessFollowSystem) return false
+  const cw = document.documentElement.clientWidth
+  if (touches.length === 2 && settings.brightnessGestureTwo) return true
+  if (touches.length !== 1) return false
+  const x = touches[0].clientX
+  if (x < cw * EDGE_WIDTH && settings.brightnessGestureLeft) return true
+  if (x > cw * (1 - EDGE_WIDTH) && settings.brightnessGestureRight) return true
+  return false
+}
 
 addEventListener('touchstart', e => {
   // 工具栏/目录抽屉区域内的触摸不参与滑动翻页（进度条拖动、目录点击等）。
   // 必须排除 #toc-wrap，否则在目录内点击小标题时 touchend 会触发 renderer.snap()，
   // 与 goTo(小标题) 的 scrollToAnchor 并发竞争滚轮位置，导致“同章小标题不跳转/偶尔不准”。
   if (e.target.closest?.('#bars') || e.target.closest?.('#toc-wrap') || e.target.closest?.('#settings-wrap')) return
-  if (e.touches.length !== 1) return
+  const isBright = resolveBrightGesture(e.touches)
+  if (!isBright && e.touches.length !== 1) return
   const t = e.touches[0]
   touch = {
     startX: t.clientX, startY: t.clientY,
     time: e.timeStamp, dx: 0, lastX: t.clientX, lastY: t.clientY, vx: 0, vy: 0, active: true,
+    brightGesture: isBright, brightBase: null, lastBright: null,
   }
 }, { passive: true })
 
@@ -1855,8 +2052,28 @@ addEventListener('touchmove', e => {
   touch.lastX = t.clientX
   touch.lastY = t.clientY
   touch.time = e.timeStamp
-  // 判定为横向滑动：先关闭栏，锁死方向、阻止默认滚动与点击穿透
-  if (Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
+  // 亮度手势 → 上下滑调亮度：仅在纵向为主时进入，激活后锁定亮度模式、不再翻页。
+  // 上移变亮、下移变暗，全屏高度映射满量程 BRIGHT_RANGE；实时只改亮度不整页重排。
+  if (touch.brightGesture && Math.abs(y) > Math.abs(x)) {
+    if (Math.abs(y) > 8) {
+      e.preventDefault(); hideBars()
+      touch.brightBase ??= num(settings.brightness, 100)
+    }
+    if (touch.lastBright !== null || Math.abs(y) > 8) {
+      const h = Math.max(1, document.documentElement.clientHeight || window.innerHeight)
+      const delta = -(t.clientY - touch.startY) / h * BRIGHT_RANGE
+      const nv = Math.round(Math.min(100, Math.max(-50, touch.brightBase + delta)))
+      if (nv !== touch.lastBright) {
+        touch.lastBright = nv
+        settings.brightness = nv
+        applyBrightnessEffect(nv)
+      }
+      e.preventDefault()
+      return
+    }
+  }
+  // 判定为横向滑动：先关闭栏，锁死方向、阻止默认滚动与点击穿透（仅单指翻页，双指亮度手势不做翻页）
+  if (e.touches.length === 1 && Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
     e.preventDefault()
     hideBars()
     // 仅动画模式做「拖动两页同屏」的滑动预览；无动画模式仍累计 dx 判定方向，
@@ -1872,6 +2089,11 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
+  // 亮度手势已激活：仅变更亮度，不做任何翻页/吸附
+  if (touch.brightGesture) {
+    if (touch.lastBright !== null) saveSettings()
+    return
+  }
   const r = view.renderer
   if (!r) return
   if (touch.dx <= -SWIPE_LIMIT) r.next()          // 左滑 → 下一页
