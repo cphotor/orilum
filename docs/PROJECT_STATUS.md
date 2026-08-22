@@ -51,7 +51,7 @@
 - [x] **① 主题 css**：三套 `LAYOUT_THEMES`（原书设置 original / 现代模式 modern / 传统模式 traditional，注入 `buildReadingCSS`）。
 - [x] **② 主题选择列表 UI**：设置面板「排版主题」列表单选，切换即 `applySettings(true)` 注入 + `saveSettings` 持久化（`settings.layoutTheme`，默认 `original`）。
 - [x] **③ 界面控件常驻层**：字号滑块（根 em）/行距/边距跨主题保持；日夜整套配色 + 单独覆盖背景色。
-  - 字号 UI 归一 0–100，**分段映射** `0..50 → 0.5..1.0`、`50..100 → 1.0..2.0`，50 档 = 各元素默认；旧套绝对 `fontSize` 自动迁移。
+  - 字号 UI 滑块以正文 px 步进（9–36px，0.1px），拖动换算 `fontScale` 档位存盘；旧套绝对 `fontSize` 自动迁移。
   - 日夜整套配色 `SCHEMES` 同时注入 `html`/`body` 的 `background+color`；`bgOverride` 独立覆盖层；日夜按钮一键切换。
 - [ ] **④ 逐条输入（手写选择器）**：左选择题器 × 右选属性 + 输入值，列表管理。
 - [ ] **⑤ 替换字体**：并入逐条层，只在选「原书」时生效。
