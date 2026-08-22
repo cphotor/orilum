@@ -372,6 +372,15 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+  /* 亮度调节手势分组标题：与上方控件标题（.set-row 的 set-label）字号保持一致 */
+  .set-gesture-title {
+    padding: 14px 16px 6px;
+    font-size: 15px;
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+  /* 亮度调节手势开关为标题下一层级：文字右缩进两格，开关保持原位置 */
+  .set-gesture-row .set-label { padding-left: 24px; }
   .set-row {
     display: flex;
     align-items: center;
@@ -1423,17 +1432,20 @@ const brightnessPage = settingsPage('亮度', el => {
     fmt: v => `${Math.round(v)}%`,
     onInput: v => { settings.eyeProtectionLevel = Math.round(v); applyBrightnessState() },
   })
-  // 亮度手势：三个独立开关，可任意多选；跟随系统时全部置灰禁用（判定逻辑见 resolveBrightGesture 的 gating）。
+  // 亮度调节手势：三个独立开关，可任意多选；跟随系统时全部置灰禁用（判定逻辑见 resolveBrightGesture 的 gating）。
   const gestureTitle = document.createElement('div')
-  gestureTitle.className = 'set-group-title'
-  gestureTitle.textContent = '亮度手势'
+  gestureTitle.className = 'set-gesture-title'
+  gestureTitle.textContent = '亮度调节手势'
   const gestureDefs = [
-    ['bri-g-L', '屏幕左侧 单指上下滑 调节亮度', 'brightnessGestureLeft'],
-    ['bri-g-R', '屏幕右侧 单指上下滑 调节亮度', 'brightnessGestureRight'],
-    ['bri-g-2', '任意区域 双指上下滑 调节亮度', 'brightnessGestureTwo'],
+    ['bri-g-L', '屏幕左侧单指上下滑动', 'brightnessGestureLeft'],
+    ['bri-g-R', '屏幕右侧单指上下滑动', 'brightnessGestureRight'],
+    ['bri-g-2', '任意位置双指上下滑动', 'brightnessGestureTwo'],
   ]
-  const gestureSwitches = gestureDefs.map(([id, label, key]) =>
-    settingsSwitch(label, id, v => { settings[key] = v; saveSettings() }))
+  const gestureSwitches = gestureDefs.map(([id, label, key]) => {
+    const sw = settingsSwitch(label, id, v => { settings[key] = v; saveSettings() })
+    sw.classList.add('set-gesture-row') // 手势开关是「亮度调节手势」的下一层级，文字右缩进
+    return sw
+  })
   /** 同步三个亮度手势开关的外观：跟随系统开启时一律显示关闭且禁用（实际不生效），
    *  关闭时才恢复为各自的实际设置状态并可用。 */
   const syncGestureSwitches = fs => gestureSwitches.forEach((sw, i) => {
