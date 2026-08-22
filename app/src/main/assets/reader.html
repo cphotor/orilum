@@ -507,7 +507,7 @@
   <div id="bar-top" class="bar">
     <button id="btn-back" type="button">‹ 书架</button>
     <span id="title">—</span>
-    <span id="chapter-info">第 <span id="chapter">0</span> 章 <span id="chapter-title"></span></span>
+    <span id="chapter-info"><span id="chapter-title"></span></span>
   </div>
   <div id="bar-bottom" class="bar">
     <div id="progress-row">
@@ -588,16 +588,13 @@ if (bottomInset > 0) document.documentElement.style.setProperty('--bottom-inset'
 
 view.addEventListener('relocate', e => {
   const loc = view.lastLocation ?? e.detail ?? {}
-  // lastLocation.section.current = 章节索引；fraction = 全书进度(0..1)
-  const chapter = (loc.section?.current ?? 0) + 1
-  $('chapter').textContent = String(chapter)
   $('chapter-title').textContent = loc.tocItem?.label ?? ''
   const pct = Math.round((loc.fraction ?? 0) * 100)
   $('pct').textContent = `${pct}%`
   // 非拖动进度条时，同步进度条位置
   if (!seeking) $('seek').value = Math.round((loc.fraction ?? 0) * 1000)
   setCurrentToc(loc.tocItem?.href)
-  log(`relocate chapter=${chapter} fraction=${(loc.fraction ?? 0).toFixed(4)} toc=${loc.tocItem?.label ?? ''}`)
+  log(`relocate fraction=${(loc.fraction ?? 0).toFixed(4)} toc=${loc.tocItem?.label ?? ''}`)
   // 上报完整定位（含 cfi）给 Kotlin 落库，用于重开恢复
   if (typeof EPUBBridge !== 'undefined' && EPUBBridge.onLocation) {
     EPUBBridge.onLocation(JSON.stringify(loc))
