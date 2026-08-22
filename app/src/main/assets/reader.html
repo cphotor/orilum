@@ -1331,7 +1331,7 @@ const mkColorPicker = (initialHex, onChange) => {
 
 // 背景色页：独立覆盖背景（原书设置 / 色板 / 自定义取色器），不改变文字与面板配色。
 // 日夜整套配色不在此重复提供——底栏工具栏已有 ☾夜间 一键切换。
-const bgOverridePage = settingsPage('背景色', el => {
+const bgOverridePage = settingsPage('背景颜色', el => {
   const grid = document.createElement('div')
   grid.className = 'preset-grid'
   const picker = mkColorPicker(settings.bgOverride || scheme().bg, hex => {
@@ -1435,7 +1435,7 @@ const mkGrayPicker = (initialHex, onChange) => {
 }
 
 // 字体色页：独立覆盖正文字色（灰度 黑↔白，不允许彩色），只影响正文，不改变背景与面板配色。
-const fgOverridePage = settingsPage('字体色', el => {
+const fgOverridePage = settingsPage('文字颜色', el => {
   const grid = document.createElement('div')
   grid.className = 'preset-grid'
   const picker = mkGrayPicker(settings.fgOverride || effectiveFg(), hex => {
@@ -1492,6 +1492,7 @@ const layoutThemePage = settingsPage('排版主题', el => {
       el.append(row)
     })
   }
+  el.onEnter = () => build() // 进入页面前按当前生效值重建，避免总是显示「原书设置」
   build()
 })
 // 字体五分类页：跟随原书开关 + 中英分离开关 + 五分类入口（各下钻到对应字体选择页）
@@ -1625,13 +1626,13 @@ const refreshValueLabels = () => {
 
 // 顶层：所有设置项平铺；可下钻项带 ›，开关项直接切换
 const settingsTopPage = settingsPage('设置', el => {
+  el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
   el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
   el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
   el.append(settingsRow('页边距', { valId: 'v-margin', value: marginValueLabel(), onTap: () => pushSettingsPage(marginPage, '页边距') }))
   el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
-  el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
-  el.append(settingsRow('字体色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '字体色') }))
-  el.append(settingsRow('背景色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景色') }))
+  el.append(settingsRow('文字颜色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '文字颜色') }))
+  el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
   el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 开启后，下次启动 app 直接进入上次阅读的书（定位恢复始终默认生效）
