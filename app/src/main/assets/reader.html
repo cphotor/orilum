@@ -747,6 +747,7 @@ const defaultSettings = {
   scheme: 'day',                // 日夜整套配色：day | night
   bgOverride: '',               // 独立覆盖背景色 hex；'' = 跟随 scheme 默认背景
   fgOverride: '',               // 独立覆盖正文字色 hex；'' = 跟随 scheme 默认文字色
+  paragraphGap: 100,          // 段间距(百分比缩放)：100 = 默认/原书值；<100 减小，>100 增大（0..400）
   lineSpacing: 1.6,
   // 页边距：上下左右各方向独立（px），四方向控件实时刷新
   marginTop: 24, marginBottom: 24, marginLeft: 32, marginRight: 32,
@@ -868,8 +869,81 @@ const reloadFonts = () => {
 }
 reloadFonts()
 
+// —— 段间距两分类缩放（段落间隙 vs 结构性留白） ——
+// 分为两类垂直留白，分开缩放，避免「段间距=0 → 全部归零」破坏书籍结构：
+//  1) 段落间隙：仅 <p>，被滑块直接接管，可归 0（配合首行缩进区分段落）；
+//  2) 结构性留白：h1–h6/blockquote/pre/figcaption/table/hr，按原书原始垂直边距 × 耦合系数，
+//     且永不归零（scale 有下界 + 最小像素间隙保底）。
+let structBoxes = null             // 结构性元素本次扫描到的原书垂直边距(px)：[{sel,mt,mb,pt,pb}]
+let structScanKey = null           // 计算 structBoxes 时的 (主题|字号) 键，变化则重扫
+let paraEast = null                // 原书模式段落风格检测：true=靠首行缩进(中文)，false=靠段间距(西式)
+let paraBase = 0                   // 书内(或被主题覆盖后)普通段落 <p> 的平均底边距(px)，作为段落间距 100% 基准
+/** 结构性标签集合：需要保留独立垂直间距、不能随段间距归零的元素。 */
+const STRUCT_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'figcaption', 'table', 'hr']
+/** 是否为块级盒：只处理块级元素的垂直边距（行内元素竖直边距无效）。 */
+const isBlockBox = d => /^(block|flex|grid|flow-root|list-item|table|table-cell)/.test(d)
+/** 度量一簇元素垂直 margin/padding 均值，返回 {mt,mb,pt,pb}(px)。 */
+const boxAvg = (doc, es) => {
+  let mt = 0, mb = 0, pt = 0, pb = 0
+  for (const e of es) {
+    const s = doc.defaultView.getComputedStyle(e)
+    mt += parseFloat(s.marginTop) || 0
+    mb += parseFloat(s.marginBottom) || 0
+    pt += parseFloat(s.paddingTop) || 0
+    pb += parseFloat(s.paddingBottom) || 0
+  }
+  return { mt: mt / es.length, mb: mb / es.length, pt: pt / es.length, pb: pb / es.length }
+}
+/**
+ * 扫描结构性元素的原书绝对垂直边距(px)，供 buildReadingCSS 按耦合系数缩放。
+ * 测量模式去掉段间距/结构覆盖、仅保留主题 css，故读到的是有效原始边距；随主题或字号变化重扫。
+ */
+const scanStructBoxes = doc => {
+  const groups = new Map()
+  for (const e of doc.querySelectorAll('body *')) {
+    if (!isBlockBox(doc.defaultView.getComputedStyle(e).display)) continue
+    const tag = e.tagName.toLowerCase()
+    if (!groups.has(tag)) groups.set(tag, [])
+    groups.get(tag).push(e)
+  }
+  const out = []
+  for (const tag of STRUCT_TAGS) {
+    const es = groups.get(tag)
+    if (!es || !es.length) continue
+    const v = boxAvg(doc, es)
+    out.push({ sel: tag, mt: v.mt, mb: v.mb, pt: v.pt, pb: v.pb })
+  }
+  return out
+}
+/**
+ * 原书模式段落风格检测：书内 <p> 是否「靠首行缩进」区分段落（中文），而非「靠段间距」（西式）。
+ * 取全书 <p> 的计算 text-indent 平均绝对值：显著（≥8px）判定中文；否则西式。
+ * 仅「原书设置」主题使用；现代/传统由主题本身直接决定。
+ */
+const detectParaEast = doc => {
+  const ps = Array.prototype.slice.call(doc.querySelectorAll('p'))
+  if (!ps.length) return false
+  let indent = 0
+  for (const p of ps) {
+    indent += Math.abs(parseFloat(doc.defaultView.getComputedStyle(p).textIndent) || 0)
+  }
+  return indent / ps.length >= 8
+}
+/**
+ * 段落间距基准：书内(或被排版主题覆盖后)普通段落 <p> 的平均底边距(margin-bottom, px)。
+ * 现代模式段落间距以它作为 100% 基准，随滑块百分比等比缩放。
+ */
+const scanParaBase = doc => {
+  const ps = Array.prototype.slice.call(doc.querySelectorAll('p'))
+  if (!ps.length) return 0
+  let mb = 0
+  for (const p of ps) mb += parseFloat(doc.defaultView.getComputedStyle(p).marginBottom) || 0
+  return mb / ps.length
+}
+
 // 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体五分类映射
-const buildReadingCSS = () => {
+// noParaOverride=true 为「测量模式」：暂不注入段间距规则，以便读到书内原始边距（计算比例用）。
+const buildReadingCSS = (noParaOverride = false) => {
   const { lineSpacing, layoutTheme,
     fontBody, fontTitle, fontCode, fontBold, fontItalic,
     marginTop, marginBottom, marginLeft, marginRight } = settings
@@ -889,12 +963,47 @@ const buildReadingCSS = () => {
   // 排版数值：根 em 字号（相对默认档位）+ 行距，始终生效（「原书设置」仅是排版主题之一，不额外屏蔽字号/行距）。
   const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
   css.push(`html { font-size: ${bodyPx.toFixed(1)}px; }`)
-  // 行距：除了 body，段落/标题等也一并应用，避免被原书更具体选择器（如 p{line-height}）覆盖导致无效
-  css.push(`html, body, p, li, blockquote, h1, h2, h3, h4, h5, h6 { line-height: ${lineSpacing}; }`)
+  // 行高：紧随「行距」设置覆盖到全部元素（含 pre/code 等），+!important 保证 UI 最高优先级，
+  // 不再遗漏任何自带不同行高的元素；最小保底 1（段间距归 0 时行内字不粘连、行高不为 0）。
+  const lh = Math.max(1, lineSpacing)
+  css.push(`html, body, body * { line-height: ${lh} !important; }`)
   // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
   // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
   const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
   if (lt.css) css.push(lt.css)
+  // ── 两分类垂直留白模型（百分比缩放）──
+  // 滑块值 = 百分比 P（0..400，100 = 默认/原书值）：scale = P/100。
+  //  - 结构性留白：书内原始垂直 margin/padding × scale（保留 min_gap 兜底，永不归零）；
+  //  - 段落间隙(现代/西式)：书内段落底边距基准 × scale；
+  //  - 传统(中文)/原书检测为中文：正文段落间隙锁死 0（靠首行缩进区分段落），滑块只调结构疏密度。
+  const P = Math.max(0, Math.min(400, Number(settings.paragraphGap) || 100))
+  const scale = P / 100
+  const MIN_GAP = 4               // 结构性最小像素间隙(px)：缩放再小也至少保留，避免结构元素贴死
+  const isEast = layoutTheme === 'traditional' ||
+    (layoutTheme === 'original' && paraEast === true)
+  // 关键：仅在 P≠100% 时才接管垂直留白；P=100% 表示「默认/原书值」，不注入任何覆盖，
+  // 让书/主题原样渲染，避免缩放写死 px 与原排版产生偏差。
+  const scaleOn = P !== 100
+  // 段落间隙：中文(传统/原书识别为中文)恒压 0（靠首行缩进分段）；西式在非 100% 时按 slider 缩放，
+  // 100% 时交由书/主题自带的段落边距（= 默认值）。
+  if (!noParaOverride && (isEast || (scaleOn && !isEast))) {
+    const mg = isEast ? 0 : Math.round(paraBase * scale)
+    css.push(`p, li { margin-block-start: 0 !important; margin-block-end: ${mg}px !important; }`)
+  }
+  // 结构性留白：仅非 100% 时，按书内原始垂直 margin/padding × scale 注入；
+  // 仅对原本非 0 的方向施加最小间隙垫底(min_gap)。
+  if (!noParaOverride && scaleOn && structBoxes) {
+    for (const { sel, mt, mb, pt, pb } of structBoxes) {
+      // 垂直方向单独处理：原值>0 才缩放并垫底，否则保持 0
+      const scaled = (orig) => orig > 0 ? Math.max(orig * scale, MIN_GAP).toFixed(2) + 'px' : '0'
+      const decs = []
+      if (mt > 0) decs.push(`margin-top: ${scaled(mt)} !important`)
+      if (mb > 0) decs.push(`margin-bottom: ${scaled(mb)} !important`)
+      if (pt > 0) decs.push(`padding-top: ${scaled(pt)} !important`)
+      if (pb > 0) decs.push(`padding-bottom: ${scaled(pb)} !important`)
+      if (decs.length) css.push(`${sel} { ${decs.join('; ')}; }`)
+    }
+  }
   // 字体五分类：映射到对应元素；空串表示该分类跟随原书字体
   const { useCjkFont } = settings
     // CJK 区段（unicode-range）：分离开启时中文字体仅声明此区段，西文字符自动回退到主字体
@@ -933,6 +1042,19 @@ const buildReadingCSS = () => {
 const applySettings = (persist = true) => {
   const r = view.renderer
   const { marginTop, marginBottom, marginLeft, marginRight } = settings
+  // 结构性留白测量：需书内/主题 CSS 生效后的原始垂直边距（测量模式暂不注入段落间隙与结构缩放规则）。
+  // 语法键 = 排版主题 + 字号（主题预设边距、书内 em 边距都随其联动），变化则重扫。
+  const structKey = settings.layoutTheme + '|' + settings.fontScale
+  if (structScanKey !== structKey) {
+    const doc = r?.getContents?.()[0]?.doc
+    if (doc) {
+      r.setStyles(buildReadingCSS(true))
+      structBoxes = scanStructBoxes(doc)
+      paraEast = detectParaEast(doc)
+      paraBase = scanParaBase(doc)
+      structScanKey = structKey
+    }
+  }
   if (r && r.setStyles) r.setStyles(buildReadingCSS())
   // 页边距：四向由 foliate #top 网格独立控制（setPageMargins 逐边注入 px）。
   //  - 上/下/左/右 = 网格外围四条轨道，每条可单独调节，互不影响；
@@ -1128,6 +1250,15 @@ const lineSpacingPage = settingsPage('行距', el => {
     onInput: v => { settings.lineSpacing = v; applySettings(true); refreshValueLabels() },
   })
   el.onEnter = () => row.sync?.(settings.lineSpacing)
+  el.append(row)
+})
+// 段间距页：百分比缩放滑块。100 = 默认/原书值；<100 减小(如 50 减半)，>100 增大(如 200 翻倍)。
+const paragraphGapPage = settingsPage('段间距', el => {
+  const row = sliderRow('段间距', {
+    min: 0, max: 400, step: 1, val: settings.paragraphGap, fmt: v => Math.round(v) + '%',
+    onInput: v => { settings.paragraphGap = Math.round(v); applySettings(true); refreshValueLabels() },
+  })
+  el.onEnter = () => row.sync?.(settings.paragraphGap)
   el.append(row)
 })
 // 页边距页：上下左右四方向独立滑块 + 数值，实时生效
@@ -1593,6 +1724,7 @@ const refreshValueLabels = () => {
   const v = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
   v('v-font-size', fontRatioLabel(settings.fontScale))
   v('v-line-spacing', `×${Number(settings.lineSpacing).toFixed(1)}`)
+  v('v-paragraph-gap', `${Math.round(settings.paragraphGap)}%`)
   v('v-margin', marginValueLabel())
   // 字体色/背景色顶层用色块方框显示当前实际颜色（夜间优先后的生效值）
   const swatch = (id, color) => { const el = document.getElementById(id); if (el) el.style.background = color }
@@ -1613,9 +1745,10 @@ const refreshValueLabels = () => {
 // 顶层：所有设置项平铺；可下钻项带 ›，开关项直接切换
 const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('排版主题', { valId: 'v-layout-theme', value: layoutThemeLabel(settings.layoutTheme), onTap: () => pushSettingsPage(layoutThemePage, '排版主题') }))
-  el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
-  el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
   el.append(settingsRow('页边距', { valId: 'v-margin', value: marginValueLabel(), onTap: () => pushSettingsPage(marginPage, '页边距') }))
+  el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
+  el.append(settingsRow('段间距', { valId: 'v-paragraph-gap', value: `${Math.round(settings.paragraphGap)}%`, onTap: () => pushSettingsPage(paragraphGapPage, '段间距') }))
+  el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
   el.append(settingsRow('字体', { valId: 'v-font-face', value: '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('文字颜色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '文字颜色') }))
   el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
