@@ -1401,7 +1401,7 @@ const brightnessPage = settingsPage('亮度', el => {
     settings.brightnessFollowSystem = v
     briSlider.setDisabled(v)
     offsetSlider.setDisabled(!v)
-    gestureSwitches.forEach(sw => sw.classList.toggle('disabled', v))
+    syncGestureSwitches(v)
     applyBrightnessState(); saveSettings(); refreshValueLabels()
   })
   const offsetSlider = sliderRow('亮度偏移', {
@@ -1434,6 +1434,12 @@ const brightnessPage = settingsPage('亮度', el => {
   ]
   const gestureSwitches = gestureDefs.map(([id, label, key]) =>
     settingsSwitch(label, id, v => { settings[key] = v; saveSettings() }))
+  /** 同步三个亮度手势开关的外观：跟随系统开启时一律显示关闭且禁用（实际不生效），
+   *  关闭时才恢复为各自的实际设置状态并可用。 */
+  const syncGestureSwitches = fs => gestureSwitches.forEach((sw, i) => {
+    sw.classList.toggle('disabled', fs)
+    sw.querySelector('input').checked = fs ? false : !!settings[gestureDefs[i][2]]
+  })
   el.append(follow, offsetSlider, briSlider, eye, eyeLevelSlider, gestureTitle, ...gestureSwitches)
   el.onEnter = () => {
     follow.querySelector('input').checked = !!settings.brightnessFollowSystem
@@ -1441,12 +1447,11 @@ const brightnessPage = settingsPage('亮度', el => {
     briSlider.sync(settings.brightness)
     eye.querySelector('input').checked = !!settings.eyeProtection
     eyeLevelSlider.sync(settings.eyeProtectionLevel)
-    gestureSwitches.forEach((s, i) => s.querySelector('input').checked = !!settings[gestureDefs[i][2]])
-    // 联动禁用：跟随系统 → 禁亮度档位、禁手势、开偏移；否则相反；护眼关 → 禁蓝光过滤量
+    // 联动禁用：跟随系统 → 禁亮度档位、手势开关一律显示关闭；护眼关 → 禁蓝光过滤量
     const fs = !!settings.brightnessFollowSystem
     briSlider.setDisabled(fs)
     offsetSlider.setDisabled(!fs)
-    gestureSwitches.forEach(sw => sw.classList.toggle('disabled', fs))
+    syncGestureSwitches(fs)
     eyeLevelSlider.setDisabled(!settings.eyeProtection)
   }
 })
