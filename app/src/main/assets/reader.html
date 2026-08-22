@@ -1428,7 +1428,7 @@ const brightnessPage = settingsPage('亮度', el => {
     applyBrightnessState(); saveSettings()
   })
   const eyeLevelSlider = sliderRow('蓝光过滤量', {
-    min: 0, max: 100, step: 1, val: num(settings.eyeProtectionLevel, 40),
+    min: 0, max: 50, step: 1, val: num(settings.eyeProtectionLevel, 40),
     fmt: v => `${Math.round(v)}%`,
     onInput: v => { settings.eyeProtectionLevel = Math.round(v); applyBrightnessState() },
   })
