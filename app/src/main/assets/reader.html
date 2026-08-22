@@ -92,14 +92,17 @@
   #zone-r { right: 0; }
 
   /* 顶/底部工具栏 */
+  /* 工具栏：永不切 display，靠 visibility(动画结束后隐藏)+transform 从屏幕边缘滑入/滑出。
+     容器 pointer-events:none 透传到翻页区；top 栏下滑、bottom 栏上滑。 */
   #bars {
     position: fixed;
     inset: 0;
     z-index: 10;
     pointer-events: none;
-    transition: opacity 0.25s ease;
+    visibility: visible;
+    transition: visibility 0s; /* 展开立即可见，开始滑入 */
   }
-  #bars.hidden { opacity: 0; }
+  #bars.hidden { visibility: hidden; transition: visibility 0s linear 0.32s; } /* 滑出动画跑完再隐藏 */
   #bars .bar {
     position: absolute;
     left: 0; right: 0;
@@ -109,13 +112,17 @@
     align-items: center;
     padding: 0 16px;
     box-sizing: border-box;
+    transition: transform 0.32s ease, opacity 0.32s ease;
   }
   #bar-top {
-    top: 0;
-    height: calc(56px + var(--top-inset, 0px));
-    padding-top: var(--top-inset, 0px); /* 工具栏整体下移至状态栏之下；深灰背景覆盖状态栏，标题栏与状态栏一体化 */
+    top: 0; /* 标题栏贴住屏幕顶；内容高度/上下 padding 由 JS 按状态栏高度内联写入，避开自定义属性的继承歧义 */
+    height: 56px; /* 默认；有状态栏时 JS 会把高度抬到 56+inset、padding-top=inset，深灰背景上延覆盖状态栏一体化 */
+    padding-top: 0;
     box-sizing: border-box;
+    transform: translateY(0);
+    opacity: 1;
   }
+  #bars.hidden #bar-top { transform: translateY(-130%); opacity: 0; } /* 向上滑出屏幕并淡出 */
   #bar-bottom {
     bottom: 0;
     height: auto;
@@ -123,7 +130,10 @@
     padding-bottom: var(--bottom-inset, 0px); /* 让底部内容避开系统手势/导航条 */
     flex-direction: column;
     gap: 0;
+    transform: translateY(0);
+    opacity: 1;
   }
+  #bars.hidden #bar-bottom { transform: translateY(130%); opacity: 0; } /* 向下滑出屏幕并淡出，避免底部残留闪白 */
   #btn-back {
     /* #bars 是 pointer-events:none（让点击穿透到翻页区），按钮需单独放行命中 */
     pointer-events: auto;
@@ -172,9 +182,44 @@
     flex: 1;
     height: 24px;
     margin: 0;
-    accent-color: #c8a15a;
+    background: transparent; /* 去掉原生 range 默认的整条白色轨道（它正是底部工具栏滑出时闪白横条的来源） */
     pointer-events: auto;
     touch-action: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  /* 自定义进度滑块轨道/拇指：轨道用半透明细条，不再是一整块白色底板 */
+  #seek::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+    box-shadow: none;
+    border: none;
+  }
+  #seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px; /* (thumb 16 - track 4)/2，让拇指居中于轨道 */
+    border-radius: 50%;
+    background: #c8a15a;
+    box-shadow: none;
+    border: none;
+  }
+  #seek::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+    box-shadow: none;
+    border: none;
+  }
+  #seek::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #c8a15a;
+    box-shadow: none;
+    border: none;
   }
   #pct { font-size: 12px; opacity: 0.85; white-space: nowrap; flex-shrink: 0; }
 
@@ -221,14 +266,19 @@
     position: fixed;
     inset: 0;
     z-index: 20;
-    display: none;
+    visibility: hidden;      /* 替代 display:none：保留布局以便 transform 过渡平滑 */
+    pointer-events: none;    /* 闭合时不可交互 */
+    transition: visibility 0s linear 0.28s; /* 滑出动画结束再隐藏 */
   }
-  #toc-wrap.show { display: block; }
+  #toc-wrap.show { visibility: visible; pointer-events: auto; transition: visibility 0s; }
   #toc-scrim {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transition: opacity 0.25s ease;
   }
+  #toc-wrap.show #toc-scrim { opacity: 1; }
   #toc-panel {
     position: absolute;
     top: 0; left: 0; bottom: 0;
@@ -312,14 +362,19 @@
     position: fixed;
     inset: 0;
     z-index: 22;
-    display: none;
+    visibility: hidden;      /* 替代 display:none，保留布局以便 transform 过渡平滑 */
+    pointer-events: none;
+    transition: visibility 0s linear 0.28s; /* 滑出动画结束再隐藏 */
   }
-  #settings-wrap.show { display: block; }
+  #settings-wrap.show { visibility: visible; pointer-events: auto; transition: visibility 0s; }
   #settings-scrim {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transition: opacity 0.25s ease;
   }
+  #settings-wrap.show #settings-scrim { opacity: 1; }
   #settings-panel {
     position: absolute;
     top: 0; right: 0; bottom: 0;
@@ -633,15 +688,24 @@ view.setAttribute('flow', 'paginated')
 
 let seeking = false // 进度条是否在拖动中
 
+// 桥接返回的是物理像素，而 WebView 内 CSS 1px = 1dp。需按 devicePixelRatio 换算成 CSS px，
+// 否则会把系统栏高度放大 dpr 倍（如 400dpi 放大 2.5 倍），导致工具栏被顶出大片空白。
+const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1
 // 底部安全区（系统手势/导航条高度）：把底部工具栏抬到其上，避免低部被系统栏遮挡
 const bottomInset = (typeof EPUBBridge !== 'undefined' && EPUBBridge.getBottomInset)
-  ? EPUBBridge.getBottomInset() : 0
-if (bottomInset > 0) document.documentElement.style.setProperty('--bottom-inset', bottomInset + 'px')
+  ? EPUBBridge.getBottomInset() / dpr : 0
+if (bottomInset > 0) document.documentElement.style.setProperty('--bottom-inset', bottomInset.toFixed(2) + 'px')
 
-// 顶部状态栏高度：让顶部工具栏把文字/按钮抬到状态栏之下，其深灰背景覆盖状态栏与标题栏一体化
+// 顶部状态栏高度：直接内联写入标题栏，把内容抬到状态栏之下、深灰背景上延覆盖状态栏与标题栏一体化。
+// 桥接返回的是物理像素，按 dpr 换算成 CSS px（400dpi 下缩小 2.5 倍，否则会被放大成大段空白）。
 const topInset = (typeof EPUBBridge !== 'undefined' && EPUBBridge.getTopInset)
-  ? EPUBBridge.getTopInset() : 0
-if (topInset > 0) document.documentElement.style.setProperty('--top-inset', topInset + 'px')
+  ? EPUBBridge.getTopInset() / dpr : 0
+if (topInset > 0) {
+  document.documentElement.style.setProperty('--top-inset', topInset.toFixed(2) + 'px')
+  const _bt = document.getElementById('bar-top')
+  _bt.style.paddingTop = topInset.toFixed(2) + 'px'
+  _bt.style.height = (56 + topInset).toFixed(2) + 'px'
+}
 
 view.addEventListener('relocate', e => {
   const loc = view.lastLocation ?? e.detail ?? {}
@@ -760,7 +824,9 @@ const showBars = () => {
 }
 const hideBars = () => {
   $('bars').classList.add('hidden')
-  syncSystemBars(false) // 工具栏收起：系统状态栏一起隐藏，沉浸阅读
+  // 与顶部标题栏同步收起系统状态栏：边到边下两状态均含 HIDE_NAVIGATION、底部无 inset 变化，
+  // 无需再靠延时错开，标题栏与状态栏一起滑出，不再有标题栏先走、状态栏滞后的停顿。
+  syncSystemBars(false)
 }
 const toggleBars = () =>
   $('bars').classList.contains('hidden') ? showBars() : hideBars()

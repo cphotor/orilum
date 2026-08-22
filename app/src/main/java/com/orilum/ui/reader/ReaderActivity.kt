@@ -1,6 +1,7 @@
 package com.orilum.ui.reader
 
 import android.annotation.SuppressLint
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -64,6 +65,9 @@ class ReaderActivity : ComponentActivity() {
     private lateinit var settingsStore: ReaderSettingsStore
     private lateinit var fontRepository: FontRepository
     private lateinit var scope: kotlinx.coroutines.CoroutineScope
+
+    /** 状态栏已彻底隐藏后再把其色置透明的延迟任务：保持隐藏过程深灰回缩、不露出阅读底色。 */
+    private var hideBarTransparentRunnable: Runnable? = null
 
     /** 持久化字体目录 uri 等跨启动状态。 */
     private val prefs by lazy { getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE) }
@@ -214,15 +218,21 @@ class ReaderActivity : ComponentActivity() {
         Log.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         FileLogger.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         // 沉浸阅读：默认隐藏状态栏与导航栏；工具栏弹出时经 JS 联动显示状态栏（见 EPUBBridge.setSystemBarsVisible）
+        // 使用 LAYOUT_FULLSCREEN|LAYOUT_STABLE 实现边到边绘制：内容始终全屏铺满，状态栏/导航栏透明叠加其上，
+        // 这样「切换应用/最近任务预览」里系统临时退出沉浸式时，顶部就是阅读页本身，不会露出独立的深色/白色条。
         window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-        // 系统栏配色与顶部工具栏一致（均为 #303030，≈原工具栏 rgba(30,30,30,0.92) 深灰观感），
-        // 工具栏弹出时状态栏透出同色、与标题栏融为一体。
-        window.statusBarColor = 0xFF303030.toInt()
-        window.navigationBarColor = 0xFF303030.toInt()
-        window.decorView.setBackgroundColor(0xFF303030.toInt())
+        // 系统栏配色跟随工具栏显隐动态设置（见 setSystemBarsVisible）：默认透明 + 浅色窗底，
+        // 避免在「切换应用/最近任务预览」时系统强制退出沉浸式、把固定 #303030 状态栏渲染成顶部深色横条
+        //（其他应用无此问题，因为它们状态栏与内容同色）。仅在工具栏弹出时置为 #303030 与标题栏融为一色。
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        // 窗底透明：预览/过渡时由 WebView 阅读页本身铺满，不额外透出任何横条色
+        window.decorView.setBackgroundColor(Color.TRANSPARENT)
 
         webView = WebView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -310,9 +320,36 @@ class ReaderActivity : ComponentActivity() {
                     // 工具栏显示/隐藏联动系统状态栏（桥线程 → 主线程）；导航栏始终隐藏
                     runOnUiThread {
                         runCatching {
-                            @Suppress("DEPRECATION")
-                            window.decorView.systemUiVisibility = if (show) View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            else View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            val decor = window.decorView
+                            if (show) {
+                                // 取消待执行的「置透明」，避免隐藏中被打断
+                                hideBarTransparentRunnable?.let { decor.removeCallbacks(it) }
+                                // 工具栏弹出：状态栏同色深灰、与标题栏融为一体
+                                window.statusBarColor = 0xFF303030.toInt()
+                                window.navigationBarColor = 0xFF303030.toInt()
+                                @Suppress("DEPRECATION")
+                                decor.systemUiVisibility =
+                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            } else {
+                                // 收起：先保持深灰回缩，让系统状态栏回缩动画全程是深灰，不瞬间露出阅读底色；
+                                // 待状态栏彻底隐藏后再延迟置透明（透明仅用于隐藏态，避免最近任务预览出深色条）。
+                                window.statusBarColor = 0xFF303030.toInt()
+                                window.navigationBarColor = 0xFF303030.toInt()
+                                @Suppress("DEPRECATION")
+                                decor.systemUiVisibility =
+                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                val r = Runnable {
+                                    runOnUiThread {
+                                        runCatching {
+                                            window.statusBarColor = Color.TRANSPARENT
+                                            window.navigationBarColor = Color.TRANSPARENT
+                                        }
+                                    }
+                                }
+                                hideBarTransparentRunnable = r
+                                decor.postDelayed(r, 320)
+                            }
                         }
                     }
                 },
@@ -334,8 +371,12 @@ class ReaderActivity : ComponentActivity() {
         } ?: 0
     }
 
-    /** 顶部状态栏高度(px)。状态栏常驻显示时，供工具栏把文字/按钮抬到其下，并通过 padding-top 让深灰背景覆盖状态栏区域达到一体化。 */
+    /** 顶部状态栏高度(px)。状态栏常驻显示时，供工具栏把文字/按钮抬到其下，并通过 padding-top 让深灰背景覆盖状态栏区域达到一体化。
+     *  优先读系统 `status_bar_height` 资源：无论状态栏当前显隐、是否边到边，都返回真实高度，
+     *  避免在 onCreate 时 rootWindowInsets 未就绪/被 LAYOUT_FULLSCREEN 摊平而误返回 0，导致标题栏被状态栏遮盖。 */
     private fun topInset(): Int {
+        val res = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (res > 0) return resources.getDimensionPixelSize(res)
         return window.decorView.rootWindowInsets?.let { insets ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                 insets.getInsets(android.view.WindowInsets.Type.statusBars()).top
@@ -356,6 +397,8 @@ class ReaderActivity : ComponentActivity() {
 
     private fun reapplyImmersive() {
         window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
