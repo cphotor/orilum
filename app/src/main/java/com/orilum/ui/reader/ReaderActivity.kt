@@ -213,11 +213,16 @@ class ReaderActivity : ComponentActivity() {
         }
         Log.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         FileLogger.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
-        // 沉浸式（隐藏状态栏/导航栏），M1 会做成可收起
+        // 沉浸阅读：默认隐藏状态栏与导航栏；工具栏弹出时经 JS 联动显示状态栏（见 EPUBBridge.setSystemBarsVisible）
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        // 系统栏配色与顶部工具栏一致（均为 #303030，≈原工具栏 rgba(30,30,30,0.92) 深灰观感），
+        // 工具栏弹出时状态栏透出同色、与标题栏融为一体。
+        window.statusBarColor = 0xFF303030.toInt()
+        window.navigationBarColor = 0xFF303030.toInt()
+        window.decorView.setBackgroundColor(0xFF303030.toInt())
 
         webView = WebView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -300,6 +305,17 @@ class ReaderActivity : ComponentActivity() {
                 { exitImmersiveAndPickFontDir() },
                 { finish() },
                 bottomInset(),
+                topInset(),
+                { show ->
+                    // 工具栏显示/隐藏联动系统状态栏（桥线程 → 主线程）；导航栏始终隐藏
+                    runOnUiThread {
+                        runCatching {
+                            @Suppress("DEPRECATION")
+                            window.decorView.systemUiVisibility = if (show) View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            else View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        }
+                    }
+                },
                 { applyBrightness(it) },
                 { applyOffsetBrightness(it) },
             ),
@@ -315,6 +331,15 @@ class ReaderActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                 insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
             else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+        } ?: 0
+    }
+
+    /** 顶部状态栏高度(px)。状态栏常驻显示时，供工具栏把文字/按钮抬到其下，并通过 padding-top 让深灰背景覆盖状态栏区域达到一体化。 */
+    private fun topInset(): Int {
+        return window.decorView.rootWindowInsets?.let { insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                insets.getInsets(android.view.WindowInsets.Type.statusBars()).top
+            else @Suppress("DEPRECATION") insets.systemWindowInsetTop
         } ?: 0
     }
 
@@ -462,6 +487,8 @@ class EPUBBridge(
     private val pickFontDirectory: () -> Unit,
     private val exit: () -> Unit,
     private val bottomInset: Int,
+    private val topInset: Int,
+    private val setSystemBarsVisibility: (Boolean) -> Unit,
     private val applyBrightness: (Int) -> Unit,
     private val applySystemBrightnessOffset: (Int) -> Unit,
 ) {
@@ -495,6 +522,14 @@ class EPUBBridge(
     /** 底部导航区/手势条高度(px)，用于把底部工具栏抬到系统导航之上，避免被遮挡。 */
     @JavascriptInterface
     fun getBottomInset(): Int = bottomInset
+
+    /** 顶部状态栏高度(px)，用于把顶部工具栏抬到状态栏之下、深灰背景覆盖状态栏，标题栏与状态栏一体化。 */
+    @JavascriptInterface
+    fun getTopInset(): Int = topInset
+
+    /** 工具栏弹出/收起时联动显示/隐藏系统状态栏（导航始终隐藏）。由 JS 在 showBars/hideBars 时调用。 */
+    @JavascriptInterface
+    fun setSystemBarsVisible(show: Boolean) = setSystemBarsVisibility(show)
 
     /** 返回当前字体目录候选 JSON 数组：`[{key,name,lang}]`（仅可用字体；删源即消失）。 */
     @JavascriptInterface

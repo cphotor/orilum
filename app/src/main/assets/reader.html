@@ -103,14 +103,19 @@
   #bars .bar {
     position: absolute;
     left: 0; right: 0;
-    background: rgba(30, 30, 30, 0.92);
+    background: #303030; /* 实色深灰（≈原 rgba(30,30,30,0.92) 观感，没那么黑）：与系统状态栏完全同色，弹出时融为一体 */
     color: #f5f5f5;
     display: flex;
     align-items: center;
     padding: 0 16px;
     box-sizing: border-box;
   }
-  #bar-top { top: 0; height: 56px; }
+  #bar-top {
+    top: 0;
+    height: calc(56px + var(--top-inset, 0px));
+    padding-top: var(--top-inset, 0px); /* 工具栏整体下移至状态栏之下；深灰背景覆盖状态栏，标题栏与状态栏一体化 */
+    box-sizing: border-box;
+  }
   #bar-bottom {
     bottom: 0;
     height: auto;
@@ -633,6 +638,11 @@ const bottomInset = (typeof EPUBBridge !== 'undefined' && EPUBBridge.getBottomIn
   ? EPUBBridge.getBottomInset() : 0
 if (bottomInset > 0) document.documentElement.style.setProperty('--bottom-inset', bottomInset + 'px')
 
+// 顶部状态栏高度：让顶部工具栏把文字/按钮抬到状态栏之下，其深灰背景覆盖状态栏与标题栏一体化
+const topInset = (typeof EPUBBridge !== 'undefined' && EPUBBridge.getTopInset)
+  ? EPUBBridge.getTopInset() : 0
+if (topInset > 0) document.documentElement.style.setProperty('--top-inset', topInset + 'px')
+
 view.addEventListener('relocate', e => {
   const loc = view.lastLocation ?? e.detail ?? {}
   $('chapter-title').textContent = loc.tocItem?.label ?? ''
@@ -744,10 +754,20 @@ const openTOC = () => {
 
 const closeTOC = () => $('toc-wrap').classList.remove('show')
 // 工具栏显隐
-const showBars = () => $('bars').classList.remove('hidden')
-const hideBars = () => $('bars').classList.add('hidden')
+const showBars = () => {
+  $('bars').classList.remove('hidden')
+  syncSystemBars(true) // 工具栏弹出：系统状态栏一起弹出，融为一体
+}
+const hideBars = () => {
+  $('bars').classList.add('hidden')
+  syncSystemBars(false) // 工具栏收起：系统状态栏一起隐藏，沉浸阅读
+}
 const toggleBars = () =>
   $('bars').classList.contains('hidden') ? showBars() : hideBars()
+/** 联动系统状态栏显隐（由原生将工具栏背景 #1e1e1e 与状态栏融为一色）。 */
+const syncSystemBars = show => {
+  if (typeof EPUBBridge !== 'undefined' && EPUBBridge.setSystemBarsVisible) EPUBBridge.setSystemBarsVisible(show)
+}
 
 const setCurrentToc = href => {
   if (currentTocEl) currentTocEl.classList.remove('current')
