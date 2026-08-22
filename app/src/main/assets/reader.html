@@ -870,17 +870,28 @@ const reloadFonts = () => {
 }
 reloadFonts()
 
-// —— 段间距两分类缩放（段落间隙 vs 结构性留白） ——
-// 分为两类垂直留白，分开缩放，避免「段间距=0 → 全部归零」破坏书籍结构：
-//  1) 段落间隙：仅 <p>，被滑块直接接管，可归 0（配合首行缩进区分段落）；
-//  2) 结构性留白：h1–h6/blockquote/pre/figcaption/table/hr，按原书原始垂直边距 × 耦合系数，
-//     且永不归零（scale 有下界 + 最小像素间隙保底）。
+// —— 垂直留白两分类（段间距 vs 疏密） ——
+// 按段落 vs 结构拆分，避免「段间距=0 → 全部归零」破坏书籍结构：
+//  1) 段间距：段落 p（含脏EPUB的纯文本div，类 .olr-para），被滑块直接接管，可归 0（配合首行缩进区分段落）；
+//  2) 疏密：其余全部块级元素，按原书原始垂直边距 × scale，永不归零（scale 自然还原 + 最小像素间隙保底）。
 let structBoxes = null             // 结构性元素本次扫描到的原书垂直边距(px)：[{sel,mt,mb,pt,pb}]
 let structScanKey = null           // 计算 structBoxes 时的 (主题|字号) 键，变化则重扫
-/** 结构性标签集合：需要保留独立垂直间距、不能随段间距归零的元素。 */
-const STRUCT_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'figcaption', 'table', 'hr']
 /** 是否为块级盒：只处理块级元素的垂直边距（行内元素竖直边距无效）。 */
 const isBlockBox = d => /^(block|flex|grid|flow-root|list-item|table|table-cell)/.test(d)
+/**
+ * 是否为「段落」（归段间距滑块）：
+ *  - <p> 始终是段落；
+ *  - 纯文本 div（无块级子节点且含非空文本）视为脏EPUB伪段落，也按段落处理；
+ *  其余块级元素（含 body/blockquote/div 容器/li/th/td/结构标签等）一律归疏密滑块。
+ */
+const isPara = (doc, el) => {
+  const tag = el.tagName.toLowerCase()
+  if (tag === 'p') return true
+  if (tag !== 'div') return false
+  const blockChild = [...el.children].some(c => isBlockBox(doc.defaultView.getComputedStyle(c).display))
+  if (blockChild) return false
+  return (el.textContent || '').replace(/\s+/g, '').length > 0
+}
 /** 度量一簇元素垂直 margin/padding 均值，返回 {mt,mb,pt,pb}(px)。 */
 const boxAvg = (doc, es) => {
   let mt = 0, mb = 0, pt = 0, pb = 0
@@ -906,9 +917,32 @@ const scanStructBoxes = doc => {
     groups.get(tag).push(e)
   }
   const out = []
-  for (const tag of STRUCT_TAGS) {
-    const es = groups.get(tag)
-    if (!es || !es.length) continue
+  for (const [tag, es] of groups) {
+    const v = boxAvg(doc, es)
+    out.push({ sel: tag, mt: v.mt, mb: v.mb, pt: v.pt, pb: v.pb })
+  }
+  return out
+}
+/**
+ * 扫描垂直留白模型，返回结构性元素的平均垂直边距(px)：
+ *  逐一遍历书内全部块级元素，排除段落(p + 纯文本div)后，其余全部归「疏密」。
+ *  测量模式去掉段间距/结构覆盖、仅保留主题 css，故读到的是有效原始边距；随主题或字号变化重扫。
+ *  纯文本伪段落 div 就地加 .olr-para 类，供段间距规则统一命中。
+ */
+const scanSpacing = doc => {
+  const groups = new Map()
+  for (const e of doc.querySelectorAll('body *')) {
+    if (!isBlockBox(doc.defaultView.getComputedStyle(e).display)) continue
+    if (isPara(doc, e)) {
+      if (e.tagName.toLowerCase() !== 'p') e.classList.add('olr-para')
+      continue
+    }
+    const tag = e.tagName.toLowerCase()
+    if (!groups.has(tag)) groups.set(tag, [])
+    groups.get(tag).push(e)
+  }
+  const out = []
+  for (const [tag, es] of groups) {
     const v = boxAvg(doc, es)
     out.push({ sel: tag, mt: v.mt, mb: v.mb, pt: v.pt, pb: v.pb })
   }
@@ -948,12 +982,12 @@ const buildReadingCSS = (noParaOverride = false) => {
   const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
   if (lt.css) css.push(lt.css)
   // ── 两个独立垂直间距控件 ──
-  //  1) 段间距(paragraphSpacing, em)：正文段落 p 的底部间距，随字号等比缩放，默认 0（靠首行缩进区分段落）；
-  //  2) 疏密(paragraphGap, %)：结构性元素(h1–h6/blockquote/pre/figcaption/table/hr)的垂直 margin/padding
+  //  1) 段间距(paragraphSpacing, em)：段落(p + 纯文本div)底部间距，随字号等比缩放，默认 0；
+  //  2) 疏密(paragraphGap, %)：其余全部块级元素(标题/引用/代码/列表/div容器/th/td 等)的垂直 margin/padding
   //     × scale(=P/100，P=100 时 scale=1 自然还原原排版)，永不归零（min_gap 兜底）。
   const gapEm = Math.max(0, Math.min(2, num(settings.paragraphSpacing, 0)))
   if (!noParaOverride) {
-    css.push(`p, li { margin-block-start: 0 !important; margin-block-end: ${gapEm}em !important; }`)
+    css.push(`p, .olr-para { margin-block-start: 0 !important; margin-block-end: ${gapEm}em !important; }`)
   }
   const P = Math.max(0, Math.min(400, num(settings.paragraphGap, 100)))
   const scale = P / 100
@@ -1015,7 +1049,7 @@ const applySettings = (persist = true) => {
     const doc = r?.getContents?.()[0]?.doc
     if (doc) {
       r.setStyles(buildReadingCSS(true))
-      structBoxes = scanStructBoxes(doc)
+      structBoxes = scanSpacing(doc)
       structScanKey = structKey
     }
   }
