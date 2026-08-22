@@ -757,7 +757,6 @@ const defaultSettings = {
   // 中英分离开关 + 每分类的中文字体（分离开启时才使用，负责 CJK 区段）
   useCjkFont: false,
   fontBodyCjk: '', fontTitleCjk: '', fontCodeCjk: '', fontBoldCjk: '', fontItalicCjk: '',
-  useOriginalStyle: false, useUserScripts: false,
   // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
   layoutTheme: 'original',
   pageAnim: true, autoContinue: true, pageNum: false,
@@ -874,7 +873,7 @@ reloadFonts()
 
 // 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体五分类映射
 const buildReadingCSS = () => {
-  const { lineSpacing, useOriginalStyle, layoutTheme,
+  const { lineSpacing, layoutTheme,
     fontBody, fontTitle, fontCode, fontBold, fontItalic,
     marginTop, marginBottom, marginLeft, marginRight } = settings
   const bodyBg = effectiveBg()
@@ -890,20 +889,17 @@ const buildReadingCSS = () => {
   // #background 纸面色（默认取原书白色背景）同步染色，杜绝「夜间模式左右页边距透出白底」。
   css.push(`html { background: ${bodyBg} !important; color: ${textColor} !important; --theme-bg-color: ${bodyBg}; }`)
   css.push(`body { background: ${bodyBg} !important; color: ${textColor} !important; }`)
-  // 排版数值：根 em 字号（相对默认档位）+ 行距；useOriginalStyle 开则不改字号/行距（仅跟随原书）
-  if (!useOriginalStyle) {
-    const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
-    css.push(`html { font-size: ${bodyPx.toFixed(1)}px; }`)
-    // 行距：除了 body，段落/标题等也一并应用，避免被原书更具体选择器（如 p{line-height}）覆盖导致无效
-    css.push(`html, body, p, li, blockquote, h1, h2, h3, h4, h5, h6 { line-height: ${lineSpacing}; }`)
-    // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
-    // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
-    const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
-    if (lt.css) css.push(lt.css)
-  }
-  // 字体五分类：映射到对应元素；空串/跟随原书则跳过
-  if (!useOriginalStyle) {
-    const { useCjkFont } = settings
+  // 排版数值：根 em 字号（相对默认档位）+ 行距，始终生效（「原书设置」仅是排版主题之一，不额外屏蔽字号/行距）。
+  const bodyPx = BASE_BODY_PX * fontScaleToRatio(settings.fontScale)
+  css.push(`html { font-size: ${bodyPx.toFixed(1)}px; }`)
+  // 行距：除了 body，段落/标题等也一并应用，避免被原书更具体选择器（如 p{line-height}）覆盖导致无效
+  css.push(`html, body, p, li, blockquote, h1, h2, h3, h4, h5, h6 { line-height: ${lineSpacing}; }`)
+  // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
+  // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
+  const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
+  if (lt.css) css.push(lt.css)
+  // 字体五分类：映射到对应元素；空串表示该分类跟随原书字体
+  const { useCjkFont } = settings
     // CJK 区段（unicode-range）：分离开启时中文字体仅声明此区段，西文字符自动回退到主字体
     const CJK_RANGE = 'U+3000-303F, U+3040-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF'
     const cjkAlias = a => (a ? `${a}_cjk` : a)
@@ -933,7 +929,6 @@ const buildReadingCSS = () => {
       if (main) fam.push(`'${main}'`)
       if (fam.length) css.push(`${sel} { font-family: ${fam.join(', ')}, ${fb}; }`)
     })
-  }
   return css.join('\n')
 }
 
@@ -1495,14 +1490,8 @@ const layoutThemePage = settingsPage('排版主题', el => {
   el.onEnter = () => build() // 进入页面前按当前生效值重建，避免总是显示「原书设置」
   build()
 })
-// 字体五分类页：跟随原书开关 + 中英分离开关 + 五分类入口（各下钻到对应字体选择页）
+// 字体五分类页：中英分离开关 + 五分类入口（各下钻到对应字体选择页）
 const fontFacePage = settingsPage('字体', el => {
-  // 全局总开关：跟随原书样式（开则所有字体/字号行距都不注入）
-  const orig = settingsSwitch('跟随原书样式', 'set-orig', v => {
-    settings.useOriginalStyle = v; applySettings(true); refreshValueLabels()
-  })
-  orig.querySelector('input').checked = settings.useOriginalStyle
-  el.append(orig)
   // 中英分离开关：开启后每个分类可分别指定中文字体（CJK）与英文字体（主字体）
   const sep = settingsSwitch('中英文字体分离', 'set-cjk-sep', v => {
     settings.useCjkFont = v; applySettings(true); refreshValueLabels()
@@ -1613,7 +1602,7 @@ const refreshValueLabels = () => {
   swatch('v-bg', effectiveBg())
   swatch('v-fg', effectiveFg())
   v('v-layout-theme', layoutThemeLabel(settings.layoutTheme))
-  v('v-font-face', settings.useOriginalStyle ? '跟随原书' : '自定义')
+  v('v-font-face', '自定义')
   // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
   FONT_KEYS.forEach(([key]) => {
     if (settings.useCjkFont && settings[key + 'Cjk']) {
@@ -1630,7 +1619,7 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('字号', { valId: 'v-font-size', value: fontRatioLabel(settings.fontScale), onTap: () => pushSettingsPage(fontSizePage, '字号') }))
   el.append(settingsRow('行距', { valId: 'v-line-spacing', value: `×${Number(settings.lineSpacing).toFixed(1)}`, onTap: () => pushSettingsPage(lineSpacingPage, '行距') }))
   el.append(settingsRow('页边距', { valId: 'v-margin', value: marginValueLabel(), onTap: () => pushSettingsPage(marginPage, '页边距') }))
-  el.append(settingsRow('字体', { valId: 'v-font-face', value: settings.useOriginalStyle ? '跟随原书' : '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
+  el.append(settingsRow('字体', { valId: 'v-font-face', value: '自定义', onTap: () => pushSettingsPage(fontFacePage, '字体') }))
   el.append(settingsRow('文字颜色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '文字颜色') }))
   el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
@@ -1654,7 +1643,6 @@ const refreshSettingsUI = () => {
   if (set('set-page-anim')) set('set-page-anim').checked = settings.pageAnim
   if (set('set-auto-continue')) set('set-auto-continue').checked = settings.autoContinue
   if (set('set-page-num')) set('set-page-num').checked = settings.pageNum
-  if (set('set-orig')) set('set-orig').checked = settings.useOriginalStyle
   if (set('set-cjk-sep')) set('set-cjk-sep').checked = settings.useCjkFont
 }
 
