@@ -739,7 +739,6 @@ $('toc-scrim').addEventListener('click', closeTOC)
 // 后端配置数据层（Kotlin ReaderSettings）已就绪：
 //   getSettings()   读当前生效值（用户套，无则默认套）
 //   saveSettings()  写入用户套
-//   resetSettings() 一键重置回默认套并返回默认 JSON
 // 本层维护 JS 侧拷贝 settings，改动后先应用到渲染再回写，保证 UI 与生效值一致。
 const defaultSettings = {
   theme: 'sepia', fontSize: 18, // 旧套字段（绝对px/背景名），仅兼容迁移；新版由 fontScale/scheme/bgOverride 接管
@@ -1089,20 +1088,6 @@ const saveSettings = () => {
     EPUBBridge.saveSettings(JSON.stringify(settings))
     log('settings saved')
   }
-}
-
-// 一键重置：删除用户套 → 后端返回默认 JSON → 刷新本地状态并应用
-const resetSettings = () => {
-  const d = bridgeGet('resetSettings')
-  if (d) {
-    settings = { ...defaultSettings, ...JSON.parse(d) }
-  } else {
-    settings = { ...defaultSettings }
-  }
-  refreshSettingsUI()
-  refreshValueLabels()
-  applySettings(true)
-  toast('已恢复默认设置')
 }
 
 // ── 设置抽屉：多级下钻页面栈 ──────────────────
@@ -1759,18 +1744,12 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('文字颜色', { valId: 'v-fg', swatch: true, onTap: () => pushSettingsPage(fgOverridePage, '文字颜色') }))
   el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
-  el.append(settingsSwitch('打开时自动续读', 'set-auto-continue', v => {
+  el.append(settingsSwitch('启动时继续阅读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 开启后，下次启动 app 直接进入上次阅读的书（定位恢复始终默认生效）
   }))
-  el.append(settingsSwitch('显示页码', 'set-page-num', v => {
+  el.append(settingsSwitch('显示页码（规划中）', 'set-page-num', v => {
     settings.pageNum = v; saveSettings() // 页码显示依赖分页计数方案，见 PROJECT_STATUS TODO
   }))
-  // 一键重置（危险操作，置底）
-  const reset = document.createElement('div')
-  reset.className = 'set-group-title'
-  reset.textContent = '· · ·'
-  el.append(reset)
-  el.append(settingsRow('恢复默认设置', { onTap: () => { if (confirm('确定恢复所有设置为默认吗？')) resetSettings() } }))
 })
 
 // 打开/关闭设置抽屉时同步控件到当前值
