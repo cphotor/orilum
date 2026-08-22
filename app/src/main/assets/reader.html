@@ -17,6 +17,11 @@
     touch-action: pan-y;
   }
 
+  /* 禁用 WebView 点击聚焦高亮/聚焦环：点按控件（滑块加减、开关等）不再整块闪背景，
+     视觉反馈仅由控件自身的 :active 样式承担，避免「控件像获得焦点一样闪一下」。 */
+  * { -webkit-tap-highlight-color: transparent; }
+  *:focus { outline: none; box-shadow: none; }
+
   /* 日夜整套配色：驱动工具栏/抽屉面板/控件等「界面常驻层」换肤。
      body[data-scheme] 由 applySettings 依 settings.scheme 设置。 */
   body[data-scheme="day"] {
@@ -24,7 +29,7 @@
     --ui-border: #ece9e2; --ui-border-soft: #f0ede6;
     --ui-row-active: #efece4; --ui-card-bg: #ffffff; --ui-card-border: #e3dfd5;
     --ui-muted: #999; --ui-muted2: #888; --ui-chevron: #bbb;
-    --ui-switch-track: #c9c4ba;
+    --ui-switch-track: #c9c4ba; --ui-slider-track: #e7e3d9;
     --ui-sel-bg: #faf3e6; --ui-sel-text: #8a5f1f; --ui-sel-border: #c8a15a;
     --ui-chip-text: #555; --ui-slider-btn: #f0ede6; --ui-slider-btn-active: #e1dccf;
     --ui-slab: rgba(0, 0, 0, 0.08);
@@ -34,7 +39,7 @@
     --ui-border: #2c2c2e; --ui-border-soft: #2a2a2c;
     --ui-row-active: #262628; --ui-card-bg: #232326; --ui-card-border: #343438;
     --ui-muted: #8a8a8a; --ui-muted2: #909090; --ui-chevron: #666;
-    --ui-switch-track: #4a4a4e;
+    --ui-switch-track: #4a4a4e; --ui-slider-track: #3a3a3e;
     --ui-sel-bg: #2a2018; --ui-sel-text: #d9a94f; --ui-sel-border: #8a5f1f;
     --ui-chip-text: #c9c9c9; --ui-slider-btn: #2c2c2e; --ui-slider-btn-active: #38383c;
     --ui-slab: rgba(255, 255, 255, 0.10);
@@ -351,7 +356,6 @@
     cursor: pointer;
     box-sizing: border-box;
   }
-  .set-row:active { background: var(--ui-row-active); }
   .set-row .set-label { flex: 1; }
   .set-row .set-value { color: var(--ui-muted2); font-size: 13px; margin-right: 4px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .set-row .set-chevron { color: var(--ui-chevron); font-size: 14px; }
@@ -395,10 +399,31 @@
     width: 34px; height: 34px; font-size: 16px; font-weight: 600;
     color: var(--ui-text); cursor: pointer; flex-shrink: 0;
   }
-  .slider-btn:active { background: var(--ui-slider-btn-active); }
+  /* 点按反馈用轻微缩放而非整块背景变色，避免「按一下控件背景闪成土黄」的刺眼效果 */
+  .slider-btn { transition: transform 0.08s ease; }
+  .slider-btn:active { transform: scale(0.88); }
   .slider-btn.disabled { opacity: 0.35; pointer-events: none; }
-  .slider-row input[type="range"] {
-    flex: 1; min-width: 0; accent-color: #c8a15a; height: 28px;
+  /* 自绘滑块：纯 div 轨道+拖柄，杜绝原生 range 在 WebView 的整卡重绘闪烁。
+     所有滑块页（字号/行距/页边距）共用，加减与拖动均只更新拖柄 left，不触发控件级整块重绘。 */
+  .slider-track {
+    flex: 1; position: relative; height: 26px; min-width: 0; touch-action: none;
+    margin: 0 2px;
+  }
+  .slider-track .st-rail {
+    position: absolute; left: 0; right: 0; top: 50%; height: 16px;
+    transform: translateY(-50%); border-radius: 8px; border: none;
+    background: var(--ui-slider-track, #e7e3d9); box-sizing: border-box;
+  }
+  .slider-track .st-fill {
+    position: absolute; left: 0; top: 50%; height: 16px;
+    transform: translateY(-50%); border-radius: 8px; border: none;
+    background: #c8a15a; pointer-events: none; max-width: 100%;
+  }
+  .slider-track .st-thumb {
+    position: absolute; top: 50%; width: 26px; height: 26px; margin-left: -13px;
+    transform: translateY(-50%); border-radius: 50%; background: #fff;
+    border: 1px solid rgba(120, 120, 120, 0.5); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+    pointer-events: none;
   }
   .slider-val { font-size: 13px; color: var(--ui-muted2); min-width: 34px; text-align: right; flex-shrink: 0; }
   /* 主题/预设选项（网格按钮） */
@@ -811,7 +836,14 @@ const fontScaleToRatio = v => {
   const x = Math.min(100, Math.max(0, Number(v)))
   return x <= 50 ? 0.5 + x * 0.01 : x * 0.02
 }
-const fontRatioLabel = v => Math.round(BASE_BODY_PX * fontScaleToRatio(v)) + 'px'
+const fontRatioLabel = v => fontScaleToPx(v).toFixed(1) + 'px'
+/** fontScale(0..100 档位) → 正文 px。滑块/按钮以 px 为步进单位，避免档位步长换算后变化过细。 */
+const fontScaleToPx = v => BASE_BODY_PX * fontScaleToRatio(v)
+/** 正文 px → fontScale 档位（fontScaleToRatio 的反函数，刻度 0.5..2.0）。 */
+const pxToFontScale = p => {
+  const ratio = Math.min(2.0, Math.max(0.5, Number(p) / BASE_BODY_PX))
+  return ratio <= 1 ? (ratio - 0.5) / 0.01 : ratio / 0.02
+}
 // 字体池：从 Kotlin 拉取设备真实可用的字体（系统扫描 + 用户导入）。
 // 每项 {key(源文件标识，供 /fonts/{key} 加载), name(文件名去扩展名), lang(cjk|latin|generic)}；
 // 选择值用内部别名 alias 记入 settings（'' = 跟随原书），CSS 里经 @font-face url(/fonts/{key}) 实际加载源文件。
@@ -1034,29 +1066,51 @@ const settingsSwitch = (label, id, onChange) => {
 
 // ── 工具函数：创建滑块细则行 / 选项 chips ──────────────────
 // 字号细则：- 滑块 +；行距细则：- 滑块 +
+// 滑块用自绘 div 轨道+拖柄（非原生 range），避免 WebView 整卡重绘闪烁。
+// 交互：点击轨道跳转、拖柄拖动、−/+ 按钮步进，均只更新拖柄 left 与回调数值。
 const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
   const div = document.createElement('div')
   div.className = 'set-row slider-row'
   div.innerHTML = `<span class="set-label">${label}</span>
     <span class="slider-controls">
       <button type="button" class="slider-btn minus">−</button>
-      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}">
+      <span class="slider-track"><span class="st-rail"></span><span class="st-fill"></span><span class="st-thumb"></span></span>
       <button type="button" class="slider-btn plus">+</button>
       <span class="slider-val">${fmt ? fmt(val) : val}</span>
     </span>`
-  const input = div.querySelector('input')
+  const trackEl = div.querySelector('.slider-track')
+  const fillEl = div.querySelector('.st-fill'), thumbEl = div.querySelector('.st-thumb')
   const valEl = div.querySelector('.slider-val')
   const minus = div.querySelector('.minus'), plus = div.querySelector('.plus')
   const clamp = v => Math.min(max, Math.max(min, v))
-  const setVal = v => { input.value = v; valEl.textContent = fmt ? fmt(v) : v }
-  minus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) - step)); onInput?.(parseFloat(input.value)) })
-  plus.addEventListener('click', () => { setVal(clamp(parseFloat(input.value) + step)); onInput?.(parseFloat(input.value)) })
-  // input 事件在拖动过程中持续触发 → 与取色器滑块一致的即时刷新（不再是松手才生效）
-  input.addEventListener('input', () => {
-    const v = parseFloat(input.value)
+  const pct = v => (max !== min ? (v - min) / (max - min) * 100 : 0)
+  const setVal = v => {
+    v = clamp(+v || 0)
+    const p = Math.max(0, Math.min(100, pct(v)))
+    thumbEl.style.left = p + '%'
+    fillEl.style.width = p + '%'
     valEl.textContent = fmt ? fmt(v) : v
-    onInput?.(v)
+    trackEl._v = v
+  }
+  setVal(val)
+  minus.addEventListener('click', () => { setVal((trackEl._v ?? min) - step); onInput?.(trackEl._v) })
+  plus.addEventListener('click', () => { setVal((trackEl._v ?? min) + step); onInput?.(trackEl._v) })
+  // 指针交互：按下定位/开始拖动，移动更新，松手结束。仅改拖柄 left，不触发整卡重绘。
+  const moveFrom = e => {
+    const r = trackEl.getBoundingClientRect()
+    const t = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)))
+    setVal(min + t * (max - min))
+    onInput?.(trackEl._v)
+  }
+  let dragging = false
+  trackEl.addEventListener('pointerdown', e => {
+    dragging = true
+    if (trackEl.setPointerCapture) trackEl.setPointerCapture(e.pointerId)
+    moveFrom(e); e.preventDefault()
   })
+  trackEl.addEventListener('pointermove', e => { if (dragging) moveFrom(e) })
+  const end = () => { dragging = false }
+  trackEl.addEventListener('pointerup', end); trackEl.addEventListener('pointercancel', end)
   // sync(v)：外部在打开页面时用当前保存值重设滑块位置与数值。
   // settings 为异步加载，页内控件在模块加载期仅拿到默认值，需在进入页面时对齐真实保存值。
   div.sync = setVal
@@ -1064,14 +1118,15 @@ const sliderRow = (label, { min, max, step, val, fmt, onInput } = {}) => {
 }
 
 // ── M2 下钻二级页（真实控件，改动即生效并回写）──
-// 字号页：0..100 相对默认档位（50 = 默认 1.0，整书按根 em 等比缩放）
+// 字号页：滑块以正文 px 为步进单位（0.1px），换算回 fontScale 档位存盘。默认 50 → 18.0px
 const fontSizePage = settingsPage('字号', el => {
   const row = sliderRow('字号大小', {
-    min: 0, max: 100, step: 1, val: settings.fontScale, fmt: v => fontRatioLabel(v),
-    onInput: v => { settings.fontScale = v; applySettings(true); refreshValueLabels() },
+    min: 9, max: 36, step: 0.1, val: fontScaleToPx(settings.fontScale),
+    fmt: v => Number(v).toFixed(1) + 'px',
+    onInput: v => { settings.fontScale = pxToFontScale(v); applySettings(true); refreshValueLabels() },
   })
   // 打开页面时按当前保存值对齐滑块（settings 异步加载，建页期拿到的是默认值）
-  el.onEnter = () => row.sync?.(settings.fontScale)
+  el.onEnter = () => row.sync?.(fontScaleToPx(settings.fontScale))
   el.append(row)
 })
 // 行距页
@@ -1085,22 +1140,22 @@ const lineSpacingPage = settingsPage('行距', el => {
 })
 // 页边距页：上下左右四方向独立滑块 + 数值，实时生效
 const marginPage = settingsPage('页边距', el => {
-  const mk = (label, key, min, max) => el.append(sliderRow(label, {
-    min, max, step: 1, val: settings[key], fmt: v => Math.round(v) + 'px',
-    onInput: v => { settings[key] = Math.round(v); applySettings(true); refreshValueLabels() },
-  }))
+  const rows = []
+  const mk = (label, key, min, max) => {
+    const row = sliderRow(label, {
+      min, max, step: 1, val: settings[key], fmt: v => Math.round(v) + 'px',
+      onInput: v => { settings[key] = Math.round(v); applySettings(true); refreshValueLabels() },
+    })
+    rows.push(row)
+    el.append(row)
+  }
+  const keys = ['marginTop', 'marginBottom', 'marginLeft', 'marginRight']
   mk('上边距', 'marginTop', 0, 200)
   mk('下边距', 'marginBottom', 0, 200)
   mk('左边距', 'marginLeft', 0, 200)
   mk('右边距', 'marginRight', 0, 200)
-  // 打开页面时按当前保存值对齐四个滑块
-  el.onEnter = () => el.querySelectorAll('input[type="range"]').forEach((inp, i) => {
-    const keys = ['marginTop', 'marginBottom', 'marginLeft', 'marginRight']
-    const v = settings[keys[i]]
-    inp.value = v
-    const valEl = inp.closest('.slider-controls').querySelector('.slider-val')
-    if (valEl) valEl.textContent = Math.round(v) + 'px'
-  })
+  // 打开页面时按当前保存值对齐四个滑块（复用每行 sync）
+  el.onEnter = () => rows.forEach((row, i) => row.sync?.(settings[keys[i]]))
 })
 // 通用取色器：RGB / HSL 双模式滑条 + RGB 输入（hex / 十进制）。
 // initialHex: 打开时的当前色（6 位 hex，可含 #）；onChange(hex6): 颜色变化时回调（含 #，含用户拖动/输入）。
