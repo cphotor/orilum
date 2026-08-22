@@ -31,6 +31,8 @@
 - **退出路径修复**：顶部「‹ 书架」按钮（`EPUBBridge.back() → finish()`），系统返回键统一 `finish()`，翻页只走三区点击，根治「恢复前进一页」。
 - **章号显示修复**：relocate 改用 `lastLocation.section.current`。
 - **四向独立页边距 + 全屏翻页动画（无漂移）**：左右边距折叠进列间 gap（列宽 = `size−l−r`、列 gap = `l+r`、推进 = `size`），根治「增右边距拉入下一页」的漂移；全屏滑动动画（上下边距作每列内边距）。`build.gradle.kts` 与 `reader.html` 排除官方 `paginator.js` 覆盖，保留定制版并 force-add 入版本控制。
+- **翻页动画开关 ✅**：设置面板「翻页动画」开关（`settings.pageAnim`），关时松手 `next()/prev()` 即时跳转（缺 `animated` 属性），实现「无翻页动画」；开时平滑滑动。
+- **打开应用自动续读 ✅**：MainActivity `maybeContinueLastBook()`——`autoContinue` 开关开启且记录过最后阅读书（`KEY_LAST_BOOK_ID`）时，冷启动自动进入该书阅读器；关或书已删则回书架。
 
 ### 字体
 - **字体池**：`FontParser`（TTF/OTF/TTC cmap 解析，字节序自适应 + 健康 CJK 码元判据）、`FontClassifier`（中/拉/通/符/无效 + `isUsable` 过滤）、`FontRoom`、`SystemFontScanner`、`FontRepository`（系统缓存 + 指定目录导入）。
@@ -62,8 +64,6 @@
 
 ## 待办
 
-- **翻页动画开关**：滑动是翻页动画之一，需后台开关控制「滑动/无」动画，**暂不实现**。
-- **打开应用自动打开当前书**：待「启动时自动打开上次阅读的书」开关，**暂不实施**。
 - **页码显示**：计算当前页/总页码显示在工具栏，**暂不实现**，需先定 span/页计数方案。
 - **scrolled（滚动）模式**：⏸ 暂搁（代码已移除）。跨章无缝连续滚动需“方向感知 + 异步预排”引擎手术（多 view 虚拟拼接），会触碰 CFI/进度映射，需整套回归。
 - **进度在书架列表展示**（续读百分比）。
