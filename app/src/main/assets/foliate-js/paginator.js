@@ -1085,45 +1085,26 @@ export class Paginator extends HTMLElement {
     }
 
     async snap(vx, vy) {
-        // 吸附可能落在相邻章边界（翻页/跳章判定依赖当前偏移），先收敛窗口偏移，
-        // 避免字体/预读迟到导致的偏移漂移使吸附落点映射到错误章节。
+        // 双翻修复：方向与目标都基于「拖动前」的静止基准 #scrollBounds[0]，一次手势至多翻一页。
+        // 背景：touchend 大幅滑动时 touchmove 已用 scrollBy 把位置推进到相邻页预览，若直接用当前
+        // position 反推页号再加速度，会把「预览已推进的一页」又叠一次（距离+速度双判据同时命中 → 翻两页）。
+        const size = this.size
+        const rest0 = this.#scrollBounds?.[0] ?? this.start
+        const delta = this.#scrollBounds?.length ? (this.containerPosition - rest0) : 0
+        // 小于半页视为未真正越界（小幅/回滑），只按速度方向翻一页；越过半页则按已推进方向翻一页。
+        // dir ∈ {-1, 0, 1}，恒为整数页，绝不卡在两页之间。
+        const THRESH = size / 2
+        let dir
+        if (Math.abs(delta) > THRESH) dir = delta > 0 ? 1 : -1
+        else {
+            const velocity = this.#vertical ? vy : vx
+            dir = velocity > 0 ? 1 : velocity < 0 ? -1 : 0
+        }
+        if (!dir) return this.#scrollToPage(Math.round(rest0 / size), 'snap')
+        // 目标 = 拖动前静止整页 + dir（仅一次，不叠加位移）
+        const target = Math.round(rest0 / size) + dir
         await this.#settleWindow()
-        const velocity = this.#vertical ? vy : vx
-        const [offset, a, b] = this.#scrollBounds
-        const { start, end, pages, size } = this
-        const min = Math.abs(offset) - a
-        const max = Math.abs(offset) + b
-        const d = velocity * (this.#rtl ? -size : size)
-        const page = Math.floor(
-            Math.max(min, Math.min(max, (start + end) / 2
-                + (isNaN(d) ? 0 : d))) / size)
-
-        this.#scrollToPage(page, 'snap').then(() => {
-            const dir = page <= 0 ? -1 : page >= pages - 1 ? 1 : null
-            if (dir) {
-                // 目标是相邻章节（前/后一节的末尾/开头）。
-                const target = this.#adjacentIndex(dir)
-                if (target == null) {
-                    // 已在全书首/尾、无上一节/下一节：不跳章节，
-                    // 吸附回当前有效内容页边界（避免停在正文与空白缓冲页之间的「两页中间」）。
-                    const safePage = dir < 0 ? 1 : pages - 2
-                    return safePage === page ? undefined : this.#scrollToPage(safePage, 'snap')
-                }
-                // 相邻章已在窗口（无缝拼接）：吸附到相邻章的内容边界页，无需跳章。
-                if (this.#multi && this.#viewMap.has(target)) {
-                    const tOffset = this.#offsets.get(target) ?? 0
-                    const tWidth = this.#viewWidth(this.#viewMap.get(target))
-                    const boundary = dir < 0
-                        ? (tOffset + tWidth - this.size * 2) / this.size // 目标章最后一个内容页
-                        : (tOffset + this.size) / this.size              // 目标章第一个内容页
-                    return boundary === page ? undefined : this.#scrollToPage(boundary, 'snap')
-                }
-                return this.#goTo({
-                    index: target,
-                    anchor: dir < 0 ? () => 1 : () => 0,
-                })
-            }
-        })
+        return this.#scrollToPage(target, 'snap')
     }
     // allows one to process rects as if they were LTR and horizontal
     #getRectMapper() {
