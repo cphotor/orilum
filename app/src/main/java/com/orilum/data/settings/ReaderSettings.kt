@@ -24,6 +24,10 @@ data class ReaderSettings(
     val fontSize: Int = 18,
     /** 行距（number，1.x 倍）。 */
     val lineSpacing: Double = 1.6,
+    /** 【样式系统】段间距（em）：正文段落 p（及纯文本 div）底部间距，随字号等比缩放（0..2，0=无，靠首行缩进区分段落）。 */
+    val paragraphSpacing: Double = 0.0,
+    /** 【样式系统】疏密（% 缩放 0..400，默认 100）：标题/引用/代码/列表等结构块的垂直边距整体缩放，永不归零。 */
+    val paragraphGap: Double = 100.0,
     /** 页边距：上下左右四方向独立（px）。 */
     val marginTop: Int = 24,
     val marginBottom: Int = 24,
@@ -81,6 +85,8 @@ data class ReaderSettings(
         put("theme", theme)
         put("fontSize", fontSize)
         put("lineSpacing", lineSpacing)
+        put("paragraphSpacing", paragraphSpacing)
+        put("paragraphGap", paragraphGap)
         put("marginTop", marginTop)
         put("marginBottom", marginBottom)
         put("marginLeft", marginLeft)
@@ -187,6 +193,8 @@ data class ReaderSettings(
                     theme = o.optString("theme", d.theme),
                     fontSize = o.optInt("fontSize", d.fontSize),
                     lineSpacing = o.optDouble("lineSpacing", d.lineSpacing),
+                    paragraphSpacing = o.optDouble("paragraphSpacing", d.paragraphSpacing),
+                    paragraphGap = o.optDouble("paragraphGap", d.paragraphGap),
                     marginTop = marginTop,
                     marginBottom = marginBottom,
                     marginLeft = marginLeft,
