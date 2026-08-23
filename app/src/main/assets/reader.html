@@ -2205,7 +2205,10 @@ addEventListener('touchend', e => {
   if (!r) return
   if (touch.dx <= -SWIPE_LIMIT) r.next()          // 左滑 → 下一页
   else if (touch.dx >= SWIPE_LIMIT) r.prev()      // 右滑 → 上一页
-  else r.snap(touch.vx, touch.vy)                 // 位移不足 → 吸附回当前页
+  // 位移不足 → 吸附回当前页。
+  // 注意：snap 约定 vx>0 为前进（与 paginator 内部 #onTouchMove 的 dx=(上次-当前) 一致），
+  // 而这里 vx=(当前-上次)，故取反，否则小幅回滑会误判为向前翻（出现"显示本章第二页"）。
+  else r.snap(-touch.vx, -touch.vy)
 }, { passive: true })
 
 addEventListener('touchcancel', () => {

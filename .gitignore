@@ -6,6 +6,7 @@ local.properties
 
 # IDE
 .idea/
+.kotlin/
 *.iml
 .DS_Store
 captures/

@@ -293,8 +293,9 @@ class ReaderActivity : ComponentActivity() {
 
             webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(cm: ConsoleMessage): Boolean {
-                    // vivo 限流下 console 高频输出会丢；合并写文件，不逐条打 Log
+                    // vivo 限流下 console 高频输出会丢；文件 + logcat 双写（排查翻页问题时看 logcat 即时态）
                     FileLogger.d(TAG, "[console] ${cm.message()}")
+                    Log.d(TAG, "[console] ${cm.message()}")
                     return true
                 }
             }
