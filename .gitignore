@@ -14,5 +14,4 @@ captures/
 .cxx/
 
 # 构建期自动生成（由 Gradle 任务下载/打包，不入库）
-app/src/main/assets/foliate-js/
 app/src/main/assets/sample/sample.epub

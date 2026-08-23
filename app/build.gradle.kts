@@ -94,59 +94,9 @@ dependencies {
     testImplementation(libs.org.json)
 }
 
-/** foliate-js 版本号（改动升级时更新此处即可）。 */
-val FOLIATE_JS_VERSION = "1.0.1"
-
-/** 校验：构建脚本里注册的自定义任务是否可见。 */
-tasks.register("pingFoliate") {
-    doLast { println("PING FOLIATE OK") }
-}
-
-/** tarball 缓存产物位置。 */
-val foliateJsTarball = layout.buildDirectory.file("foliate-js/cache/foliate-js-${FOLIATE_JS_VERSION}.tgz")
-
-/** 下载官方 tarball（幂等：已存在则跳过）。 */
-val downloadFoliateJs by tasks.registering {
-    outputs.file(foliateJsTarball)
-    doLast {
-        val file = foliateJsTarball.get().asFile
-        if (!file.exists()) {
-            file.parentFile.mkdirs()
-            val url = URI(
-                "https://registry.npmmirror.com/foliate-js/-/foliate-js-${FOLIATE_JS_VERSION}.tgz",
-            ).toURL()
-            logger.lifecycle("正在下载 foliate-js ${FOLIATE_JS_VERSION} ...")
-            url.openStream().use { input -> file.outputStream().use { output -> input.copyTo(output) } }
-        }
-    }
-}
-
-/** 解压 tarball，复制全部 JS 模块到 assets/foliate-js。 */
-val fetchFoliateJs by tasks.registering(Copy::class) {
-    dependsOn(downloadFoliateJs)
-    // :app 的 projectDirectory 即 app/，故 assets 是 src/main/assets
-    val outputDir = project.layout.projectDirectory.dir("src/main/assets/foliate-js")
-    outputs.dir(outputDir)
-    inputs.property("version", FOLIATE_JS_VERSION)
-    from(tarTree(resources.gzip(foliateJsTarball))) {
-        // paginator.js 已做本地定制（四向独立页边距），必须排除，避免被官方包覆盖。
-        exclude("**/paginator.js")
-        include("package/**/*.js")
-        eachFile {
-            // tar 顶层是 package/；去掉前缀，落到 assets/foliate-js/
-            path = relativePath.pathString.removePrefix("package/")
-        }
-        includeEmptyDirs = false
-    }
-    into(outputDir)
-}
-
-// 构建 APK 前确保 foliate-js 就位。
-// AGP 在脚本求值后才注册 merge*Assets 任务，故放到 afterEvaluate 延迟绑定任务引用。
-afterEvaluate {
-    tasks.named("mergeDebugAssets") { dependsOn(fetchFoliateJs) }
-    tasks.named("mergeReleaseAssets") { dependsOn(fetchFoliateJs) }
-}
+// 说明：foliate-js 已高度定制（三窗口跨章、翻页吸附、四向独立页边距、分页切分等），
+// 已纳入本仓库版本管理（app/src/main/assets/foliate-js/），不再从官方 npm 下载/覆盖。
+// 升级 foliate-js 时，直接替换目录内文件并提交即可。
 
 /**
  * 把 sample-epub-src/ 打包成合法的 EPUB3 zip 到 assets/sample/sample.epub。
