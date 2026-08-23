@@ -1156,10 +1156,15 @@ export class Paginator extends HTMLElement {
             const offset = this.#getRectMapper()(rect).left
             return this.#scrollToPage(Math.floor(offset / this.size) - 1, reason)
         }
-        // rect 是主 View 文档内坐标 → 加上主 View 全局偏移与前导缓冲（1 屏）即全局位置。
-        // 直接按全局位置 scrollToPage（offset/size），使 scrollToRect 与 getVisibleRange 互为逆操作，
-        // 重复定位不会漂移（原先 +1 会每次多翻一屏）。
-        const offset = mainOffset + this.size + this.#getRectMapper()(rect).left
+        // 让锚点吸附到其所在列的起点（列序号 = floor((docX - 左边距)/size)），
+        // 使正文距屏幕左缘正好保留左边距（与翻页页定位一致）。
+        // 直接对齐文本精确位置会把「已含左内边距的 rect.left」当屏幕基准，
+        // 令文本贴到屏幕左缘，左边距被吃掉（首屏偏左）。
+        const mapper = this.#getRectMapper()
+        const docX = mapper(rect).left
+        const l = this.#pageMargin?.left ?? 0
+        const col = Math.max(0, Math.floor((docX - l) / this.size))
+        const offset = mainOffset + this.size + col * this.size
         return this.#scrollToPage(offset / this.size, reason)
     }
     async #scrollTo(offset, reason, smooth) {
