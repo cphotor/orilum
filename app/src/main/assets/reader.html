@@ -22,38 +22,59 @@
   * { -webkit-tap-highlight-color: transparent; }
   *:focus { outline: none; box-shadow: none; }
 
-  /* 打开书加载遮罩：白屏（解析+首屏排版）期间提示「正在加载中」，首屏渲染完成后淡出移除。
-     置最高 z-index，覆盖整屏阅读底色，避免用户误以为死机。 */
+  /* 打开书加载指示器：居中的旋转动画 + 文案，叠加在底层之上。
+     有封面时叠在封面上（z-index 高于 #cover），无封面时叠在白屏底色上。
+     pointer-events:none 让点击穿透（有封面时可点封面立即进入正文）。 */
   #loading {
     position: fixed;
     inset: 0;
-    z-index: 9999;
-    background: #f4f2ec;
+    z-index: 10001;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 18px;
-    transition: opacity 0.3s ease;
+    gap: 16px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.7s ease-in-out;
   }
   #loading .spin {
-    width: 40px;
-    height: 40px;
-    border: 3px solid rgba(0, 0, 0, 0.12);
-    border-top-color: #b89a55;
+    width: 44px;
+    height: 44px;
+    border: 3px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #e0c17a;
     border-radius: 50%;
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.25);
     animation: spin 0.9s linear infinite;
   }
   #loading .txt {
-    color: #8a8a8a;
+    color: #fff;
     font-size: 14px;
     letter-spacing: 1px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   #loading.fade {
     opacity: 0;
     pointer-events: none;
   }
+  #loading.show { opacity: 1; }
+
+  /* 全屏封面开场：打开书后先将 metadata 封面整屏展示（contain 天然贴边，
+     默认竖版封面 → 上下贴边），点按或短暂停留后淡入正文。
+     仅作临时遮罩层，不进 spine，不影响 CFI/进度/链接定位。
+     淡入淡出使用较长的 ease-in-out 缓动，过渡更柔和，避免生硬闪切。 */
+  #cover {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    opacity: 0;
+    transition: opacity 0.7s ease-in-out;
+  }
+  #cover.show { opacity: 1; }
 
   /* 日夜整套配色：驱动工具栏/抽屉面板/控件等「界面常驻层」换肤。
      body[data-scheme] 由 applySettings 依 settings.scheme 设置。 */
@@ -636,6 +657,8 @@
 
 <!-- 打开书加载遮罩：白屏（解析+首屏排版）期间提示「正在加载中」，首屏渲染完成后淡出移除 -->
 <div id="loading"><div class="spin"></div><div class="txt">正在加载中，请稍候…</div></div>
+<!-- 全屏封面开场：打开书后先整屏展示 metadata 封面，点按或短暂后淡入正文（临时遮罩，不进 spine） -->
+<div id="cover"></div>
 
 <!-- 亮度压暗遮罩：遮罩叠加在实时系统亮度之上（跟随自动），用于压暗 -->
 <div id="brightness-mask"></div>
@@ -2252,7 +2275,10 @@ addEventListener('touchcancel', () => {
 }, { passive: true })
 
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
+let OPEN_START = 0 // 打开书开始时刻（performance.now），用于开场动画停留时长计算
+
 async function loadBook(path) {
+  OPEN_START = performance.now()
   const res = await fetch(path)
   if (!res.ok) throw new Error(`fetch ${path} -> ${res.status}`)
   const blob = await res.blob()
@@ -2263,6 +2289,8 @@ async function loadBook(path) {
     const s = EPUBBridge.getSavedLocator()
     if (s) last = JSON.parse(s)
   }
+  // 并行提前解出封面垫底：不等整本 view.open 完成，尽早把封面呈现出来，避免首屏长时间白屏转圈
+  preloadCover(file)
   await view.open(file)
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
@@ -2285,8 +2313,8 @@ loadBook('/book/current.epub')
     const saved = bridgeGet('getSettings')
     if (saved) settings = { ...defaultSettings, ...JSON.parse(saved) }
     applySettings(false)
-    // 首屏渲染完成，淡出并移除「正在加载中」遮罩
-    hideLoading()
+    // 首屏渲染完成 → 优先整屏展示 metadata 封面，随后淡入正文（临时遮罩，不进 spine）
+    presentCoverThenReading()
   })
   .catch(err => {
     console.error(err)
@@ -2298,14 +2326,144 @@ loadBook('/book/current.epub')
     toast('打开失败: ' + (err && err.message || err))
   })
 
-/** 淡出并移除打开书时的「正在加载中」遮罩；等两帧确保首屏真正绘制后再隐藏。 */
+/** 淡出并移除打开书时的「正在加载中」遮罩；已显示的淡出后再移除，未显示的（未 .show）直接移除。 */
 function hideLoading() {
   const el = document.getElementById('loading')
   if (!el) return
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    el.classList.add('fade')
-    setTimeout(() => el.remove(), 350)
-  }))
+  if (!el.classList.contains('show')) { el.remove(); return }
+  el.classList.add('fade')
+  setTimeout(() => el.remove(), 800)
+}
+
+/** 开场动画统一退出：把封面（若有）与加载遮罩一起淡出移除，露出已就绪的正文首屏。 */
+function dismissOpening() {
+  const coverEl = document.getElementById('cover')
+  if (coverEl) {
+    coverEl.classList.remove('show')
+    coverEl.addEventListener('transitionend', () => coverEl.remove(), { once: true })
+    setTimeout(() => coverEl.remove(), 800)
+  }
+  hideLoading()
+}
+
+let COVER_SHOWN = false // 封面是否已垫底显示（preloadCover / getCover 任一先命中即置位，避免重复）
+
+/** 把封面图整屏垫底并叠上加载动画。可安全重复调用（一次性）。 */
+function showCover(blob) {
+  const coverEl = document.getElementById('cover')
+  if (!coverEl || COVER_SHOWN) return
+  if (!blob || typeof blob === 'undefined' || typeof blob.arrayBuffer !== 'function') return
+  const url = URL.createObjectURL(blob)
+  coverEl.style.backgroundImage = `url(${url})`
+  // 底色跟当前阅读底色一致，使 contain 四周留白融入底色，不露硬边
+  coverEl.style.backgroundColor = effectiveBg()
+  coverEl.classList.add('show')
+  COVER_SHOWN = true
+  // 封面已显示 → 立即叠上加载动画
+  document.getElementById('loading')?.classList.add('show')
+}
+
+/** 从 epub 封包中独立解出封面图，不依赖 view.open 完成。
+ *  定位规则与 foliate 的 epub.js 一致：manifest[properties=cover-image] →
+ *  meta[name=cover] 指向的 manifest item → href 含 cover 的图片 → guide[type=cover]。 */
+async function extractCoverBlob(file) {
+  const { configure, ZipReader, BlobReader, TextWriter, BlobWriter } =
+    await import('./foliate-js/vendor/zip.js')
+  configure({ useWebWorkers: false })
+  const reader = new ZipReader(new BlobReader(file))
+  const entries = await reader.getEntries()
+  const map = new Map(entries.map(e => [e.filename, e]))
+  const readText = async name => {
+    const e = map.get(name)
+    return e ? await e.getData(new TextWriter()) : null
+  }
+  const readBlob = async (name, type) => {
+    const e = map.get(name)
+    return e ? await e.getData(new BlobWriter(type)) : null
+  }
+  const resolveHref = href => {
+    let dec
+    try { dec = decodeURI(href) } catch { dec = href }
+    const idx = opfPath.lastIndexOf('/')
+    const base = idx >= 0 ? opfPath.slice(0, idx + 1) : ''
+    const parts = []
+    for (const seg of (base + dec).split('/')) {
+      if (seg === '..') parts.pop()
+      else if (seg !== '' && seg !== '.') parts.push(seg)
+    }
+    return parts.join('/')
+  }
+  const container = await readText('META-INF/container.xml')
+  if (!container) return null
+  const $container = new DOMParser().parseFromString(container, 'text/xml')
+  const opfPath = $container.getElementsByTagName('rootfile')[0]?.getAttribute('full-path')
+  if (!opfPath) return null
+  const opf = await readText(opfPath)
+  if (!opf) return null
+  const $opf = new DOMParser().parseFromString(opf, 'text/xml')
+  const items = Array.from($opf.getElementsByTagName('item'))
+  const byProperty = prop => items.find(it => (it.getAttribute('properties') || '').split(/\s/).includes(prop))
+  const byId = id => items.find(it => it.getAttribute('id') === id)
+  const metaCover = Array.from($opf.getElementsByTagName('meta'))
+    .find(m => m.getAttribute('name') === 'cover')?.getAttribute('content')
+  const guideCover = Array.from($opf.getElementsByTagName('reference'))
+    .find(g => (g.getAttribute('type') || '').split(/\s/).includes('cover'))?.getAttribute('href')
+  const href = byProperty('cover-image')?.getAttribute('href')
+    ?? (metaCover ? byId(metaCover)?.getAttribute('href') : null)
+    ?? items.find(it =>
+        (it.getAttribute('href') || '').includes('cover')
+        && (it.getAttribute('media-type') || '').startsWith('image')
+      )?.getAttribute('href')
+    ?? guideCover
+  if (!href) return null
+  const type = items.find(it => it.getAttribute('href') === href)
+    ?.getAttribute('media-type') ?? 'image/png'
+  return readBlob(resolveHref(href), type)
+}
+
+/** 打开书时并行提前解封面：成功即垫底 + 叠加载动画。失败静默（后续由 getCover / 无封面分支兜底）。 */
+function preloadCover(file) {
+  extractCoverBlob(file).then(showCover).catch(() => { /* 忽略 */ })
+}
+
+/** 打开书后的开场动画：
+ *  · 有封面 → 开场封面整屏垫底，加载动画叠其上；停留 = max(1.5s, 实际加载时长)。
+ *  · 无封面 → 白屏底色上直接显示加载动画。
+ *  封面可来自提前解出的 preloadCover，或此处 getCover 兜底（任一先命中即显示）。
+ *  封面仅作临时遮罩层，不进入 spine / section 索引，不影响 CFI、进度、书内与目录链接定位。 */
+function presentCoverThenReading() {
+  const coverEl = document.getElementById('cover')
+  const showLoading = () => document.getElementById('loading')?.classList.add('show')
+  // 开场停留时长 = max(1.5s, 实际加载耗时)
+  const hold = Math.max(1500, performance.now() - OPEN_START)
+  let scheduled = false
+  const scheduleDismiss = () => {
+    if (scheduled) return
+    scheduled = true
+    dismissOpening()
+  }
+  const armDismiss = () => {
+    coverEl?.addEventListener('click', scheduleDismiss, { once: true })
+    setTimeout(scheduleDismiss, hold)
+  }
+  // preloadCover 已提前垫底封面 → 直接收尾
+  if (COVER_SHOWN) { armDismiss(); return }
+  // 否则以 book 的 getCover 兜底（此时整本已解析完成）
+  let coverPromise
+  try { coverPromise = view.book?.getCover?.() } catch { /* 忽略 */ }
+  if (!coverPromise) {
+    // 无封面：直接白屏 + 加载动画
+    showLoading()
+    setTimeout(scheduleDismiss, hold)
+    return
+  }
+  Promise.resolve(coverPromise)
+    .then(blob => {
+      showCover(blob) // 内部已做一次性去重；preload 若随后才完成也不会重复垫底
+      if (!COVER_SHOWN) showLoading() // 无可显示封面 → 白屏 + 加载动画
+      armDismiss()
+    })
+    .catch(() => { showLoading(); setTimeout(scheduleDismiss, hold) })
 }
 </script>
 </body>

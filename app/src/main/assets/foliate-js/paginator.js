@@ -197,6 +197,15 @@ const setStylesImportant = (el, styles) => {
     for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, 'important')
 }
 
+/** 是否「封面页」：首页（spine[0]）且以一张大图为主、几乎无正文。
+ *  命中则取消该页四向页边距，使封面图可整屏铺满（object-fit:contain → 至少一维贴边）。 */
+const isCoverLike = doc => {
+    if (!doc?.body) return false
+    if (!doc.body.querySelector('img')) return false
+    const textLen = (doc.body.textContent ?? '').trim().length
+    return textLen < 500
+}
+
 class View {
     #observer = new ResizeObserver(() => this.#queueExpand())
     #expandQueued = false
@@ -295,7 +304,9 @@ class View {
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
         // 四向页边距经 layout 传入，供 columnize/scrolled 写入每页内容内边距。
-        if (layout.pageMargin) this.#pageMargin = layout.pageMargin
+        // 封面页（isCover）：取消四向页边距，令其内容整屏铺满、封面图可全屏显示。
+        if (layout.pageMargin) this.#pageMargin = this.isCover
+            ? { top: 0, right: 0, bottom: 0, left: 0 } : layout.pageMargin
         if (this.#column) this.columnize(layout)
         else this.scrolled(layout)
     }
@@ -367,15 +378,18 @@ class View {
         const { width, height, margin } = this.#layout
         const vertical = this.#vertical
         const doc = this.document
+        // 封面页：取消图片边距余量（effMargin=0），水平模式 max-height 变为确定像素整屏高、
+        // max-width 恒 100%（整屏列宽），object-fit:contain → 至少一维贴边，实现整屏封面。
+        const effMargin = this.isCover ? 0 : (margin ?? 0)
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
                 'max-height': vertical
                     ? (maxHeight !== 'none' && maxHeight !== '0px' ? maxHeight : '100%')
-                    : `${height - margin * 2}px`,
+                    : `${height - effMargin * 2}px`,
                 'max-width': vertical
-                    ? `${width - margin * 2}px`
+                    ? `${width - effMargin * 2}px`
                     : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%'),
                 'object-fit': 'contain',
                 'page-break-inside': 'avoid',
@@ -495,6 +509,8 @@ export class Paginator extends HTMLElement {
     #styles
     /** doc -> [beforeStyle, style] 注入节点。用普通 Map（需可迭代应用到所有 View），destroy 时统一清理。 */
     #styleMap = new Map()
+    /** doc -> 封面页注入的「整屏铺满」style 节点，destroy 时一并清理。 */
+    #coverStyleMap = new Map()
     #mediaQuery = matchMedia('(prefers-color-scheme: dark)')
     #mediaQueryListener
     #scrollBounds
@@ -729,6 +745,15 @@ export class Paginator extends HTMLElement {
             })
             this.#container.append(view.element)
             const afterLoad = doc => {
+                // 封面页识别：首页且「以一张大图为主、几乎无正文」→ 取消该页四向边距并置零 body 边距，
+                // 使封面图整屏铺满。追加在 head 末尾（晚于宿主注入的全局阅读样式）以高优先级覆盖。
+                if (index === 0 && isCoverLike(doc)) {
+                    view.isCover = true
+                    const $coverStyle = doc.createElement('style')
+                    $coverStyle.textContent = 'html, body { margin: 0 !important; padding: 0 !important; }'
+                    doc.head.append($coverStyle)
+                    this.#coverStyleMap.set(doc, $coverStyle)
+                }
                 if (doc.head) {
                     const $styleBefore = doc.createElement('style')
                     doc.head.prepend($styleBefore)
