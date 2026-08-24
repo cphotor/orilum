@@ -950,9 +950,6 @@ const defaultSettings = {
   // 页边距：上下左右各方向独立（px），四方向控件实时刷新
   marginTop: 24, marginBottom: 24, marginLeft: 32, marginRight: 32,
   fontBody: '', fontTitle: '', fontCode: '', fontBold: '', fontItalic: '',
-  // 中英分离开关 + 每分类的中文字体（分离开启时才使用，负责 CJK 区段）
-  useCjkFont: false,
-  fontBodyCjk: '', fontTitleCjk: '', fontCodeCjk: '', fontBoldCjk: '', fontItalicCjk: '',
   // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
   layoutTheme: 'original',
   pageAnim: true, autoContinue: true, pageNum: false,
@@ -1211,36 +1208,22 @@ const buildReadingCSS = (noParaOverride = false) => {
     }
   }
   // 字体五分类：映射到对应元素；空串表示该分类跟随原书字体
-  const { useCjkFont } = settings
-    // CJK 区段（unicode-range）：分离开启时中文字体仅声明此区段，西文字符自动回退到主字体
-    const CJK_RANGE = 'U+3000-303F, U+3040-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF'
-    const cjkAlias = a => (a ? `${a}_cjk` : a)
-    // 五分类 -> [主字体字段, 中文字体字段, 对应选择器, 兜底族]
-    const cats = [
-      ['body', fontBody, 'fontBodyCjk', 'body, html', 'serif'],
-      ['title', fontTitle, 'fontTitleCjk', 'h1,h2,h3,h4,h5,h6', 'sans-serif'],
-      ['code', fontCode, 'fontCodeCjk', 'code,pre,kbd,samp', 'monospace'],
-      ['bold', fontBold, 'fontBoldCjk', 'strong,b', 'sans-serif'],
-      ['italic', fontItalic, 'fontItalicCjk', 'em,i', 'serif'],
-    ]
-    // 收集主字体与中文字体的所有 alias，去重生成 @font-face（中文字体带 unicode-range，仅声明 CJK 区段）
-    const mains = new Set(), cjks = new Set()
-    cats.forEach(([, main, cjkKey]) => { if (main) mains.add(main); if (useCjkFont && settings[cjkKey]) cjks.add(settings[cjkKey]) })
-    mains.forEach(alias => {
-      const f = faceByAlias.get(alias)
-      if (f) css.push(`@font-face { font-family: '${alias}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; }`)
-    })
-    if (useCjkFont) cjks.forEach(alias => {
-      const f = faceByAlias.get(alias)
-      if (f) css.push(`@font-face { font-family: '${cjkAlias(alias)}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; unicode-range: ${CJK_RANGE}; }`)
-    })
-    cats.forEach(([, main, cjkKey, sel, fb]) => {
-      const fam = []
-      // 分离开启时中文字体置前：CJK 字符命中它，西文字符（unicode-range 不命中）回退到主字体
-      if (useCjkFont && settings[cjkKey]) fam.push(`'${cjkAlias(settings[cjkKey])}'`)
-      if (main) fam.push(`'${main}'`)
-      if (fam.length) css.push(`${sel} { font-family: ${fam.join(', ')}, ${fb}; }`)
-    })
+  const cats = [
+    ['body', fontBody, 'body, html', 'serif'],
+    ['title', fontTitle, 'h1,h2,h3,h4,h5,h6', 'sans-serif'],
+    ['code', fontCode, 'code,pre,kbd,samp', 'monospace'],
+    ['bold', fontBold, 'strong,b', 'sans-serif'],
+    ['italic', fontItalic, 'em,i', 'serif'],
+  ]
+  const mains = new Set()
+  cats.forEach(([, main]) => { if (main) mains.add(main) })
+  mains.forEach(alias => {
+    const f = faceByAlias.get(alias)
+    if (f) css.push(`@font-face { font-family: '${alias}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; }`)
+  })
+  cats.forEach(([, main, sel, fb]) => {
+    if (main) css.push(`${sel} { font-family: '${main}', ${fb}; }`)
+  })
   return css.join('\n')
 }
 
@@ -1567,11 +1550,11 @@ const brightnessPage = settingsPage('亮度', el => {
   const offsetSlider = sliderRow('亮度偏移', {
     min: -20, max: 20, step: 1, val: num(settings.brightnessOffset, 0),
     fmt: v => v > 0 ? `+${Math.round(v)}` : `${Math.round(v)}`,
-    onInput: v => { settings.brightnessOffset = Math.round(v); applyBrightnessState(); refreshValueLabels() },
+    onInput: v => { settings.brightnessOffset = Math.round(v); applyBrightnessState(); refreshValueLabels(); saveSettings() },
   })
   const briSlider = sliderRow('亮度', {
     min: -50, max: 100, step: 1, val: num(settings.brightness, 100), fmt: brightnessLabel,
-    onInput: v => { settings.brightness = Math.round(v); applyBrightnessEffect(settings.brightness); refreshValueLabels() },
+    onInput: v => { settings.brightness = Math.round(v); applyBrightnessEffect(settings.brightness); refreshValueLabels(); saveSettings() },
   })
   const eye = settingsSwitch('护眼', 'bri-eye', v => {
     settings.eyeProtection = v
@@ -1581,7 +1564,7 @@ const brightnessPage = settingsPage('亮度', el => {
   const eyeLevelSlider = sliderRow('蓝光过滤量', {
     min: 0, max: 50, step: 1, val: num(settings.eyeProtectionLevel, 40),
     fmt: v => `${Math.round(v)}%`,
-    onInput: v => { settings.eyeProtectionLevel = Math.round(v); applyBrightnessState() },
+    onInput: v => { settings.eyeProtectionLevel = Math.round(v); applyBrightnessState(); saveSettings() },
   })
   // 亮度调节手势：三个独立开关，可任意多选；跟随系统时全部置灰禁用（判定逻辑见 resolveBrightGesture 的 gating）。
   const gestureTitle = document.createElement('div')
@@ -1958,12 +1941,6 @@ const layoutThemePage = settingsPage('排版主题', el => {
 })
 // 字体五分类页：中英分离开关 + 五分类入口（各下钻到对应字体选择页）
 const fontFacePage = settingsPage('字体', el => {
-  // 中英分离开关：开启后每个分类可分别指定中文字体（CJK）与英文字体（主字体）
-  const sep = settingsSwitch('中英文字体分离', 'set-cjk-sep', v => {
-    settings.useCjkFont = v; applySettings(true); refreshValueLabels()
-  })
-  sep.querySelector('input').checked = settings.useCjkFont
-  el.append(sep)
   // 五个分类各为一行，点击进入该分类的字体网格选择页
   FONT_KEYS.forEach(([key, label]) => {
     el.append(settingsRow(label, {
@@ -2010,9 +1987,8 @@ const fontPickerPage = (key, title) => {
 
     const scrim = document.createElement('div')
     scrim.className = 'font-group-scrim'
-    // 分离模式：中文段写入 key+Cjk（负责 CJK），英文段写入 key（主字体）。
-    // 未分离：中文/英文两组都写入同一 key（全部字符用一个字体）。
-    const cjkField = settings.useCjkFont ? (key + 'Cjk') : key
+    // 中文/英文两组都写入同一 key（未分离，全部字符用一个字体）
+    const field = key
     const group = (gLabel, items, field) => {
       const sec = document.createElement('div')
       sec.className = 'font-group'
@@ -2040,15 +2016,8 @@ const fontPickerPage = (key, title) => {
     }
     const cjk = FONT_CHOICES.filter(c => !c.face || c.face.lang === 'cjk' || c.face.lang === 'generic')
     const latin = FONT_CHOICES.filter(c => c.face && c.face.lang === 'latin')
-    scrim.append(group('中文字体', cjk, cjkField))
-    scrim.append(group('英文字体', latin, key))
-    // 分离模式提示：两段各自独立选择
-    if (settings.useCjkFont) {
-      const tip = document.createElement('div')
-      tip.className = 'set-group-title'
-      tip.textContent = '中文字体作用于汉字/CJK，英文字体作用于字母与符号'
-      scrim.append(tip)
-    }
+    scrim.append(group('中文字体', cjk, field))
+    scrim.append(group('英文字体', latin, field))
     host.append(scrim)
   }
   fontGridHosts.set(key, render)
@@ -2071,13 +2040,9 @@ const refreshValueLabels = () => {
   v('v-layout-theme', layoutThemeLabel(settings.layoutTheme))
   v('v-font-face', '自定义')
   v('v-brightness', brightnessSummary())
-  // 字体二级页各分类入口的取值：分离时显示「英A · 中B」，否则单字体名
+  // 字体二级页各分类入口的取值
   FONT_KEYS.forEach(([key]) => {
-    if (settings.useCjkFont && settings[key + 'Cjk']) {
-      v('fv-' + key, `英:${fontLabel(settings[key] || '')} 中:${fontLabel(settings[key + 'Cjk'])}`)
-    } else {
-      v('fv-' + key, fontLabel(settings[key] || ''))
-    }
+    v('fv-' + key, fontLabel(settings[key] || ''))
   })
 }
 
@@ -2107,7 +2072,6 @@ const refreshSettingsUI = () => {
   if (set('set-page-anim')) set('set-page-anim').checked = settings.pageAnim
   if (set('set-auto-continue')) set('set-auto-continue').checked = settings.autoContinue
   if (set('set-page-num')) set('set-page-num').checked = settings.pageNum
-  if (set('set-cjk-sep')) set('set-cjk-sep').checked = settings.useCjkFont
 }
 
 // 打开/关闭设置抽屉（与目录抽屉互斥）

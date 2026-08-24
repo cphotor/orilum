@@ -577,18 +577,34 @@ class EPUBBridge(
         }
     }
 
-    /** 保存用户设置：拆分写入当前书覆盖层 + 回写全局记忆。 */
+    /** 保存用户设置：拆成「书内覆盖层」「覆盖层回写全局」「纯全局字段」三条路分别落盘。 */
     @JavascriptInterface
     fun saveSettings(json: String?): Boolean {
         if (json.isNullOrBlank()) return false
         val bookId = bookIdProvider()
-        // 从 JS 回传的完整 JSON 提取覆盖层字段
-        val overlay = BookSettings.fromReaderSettingsJson(json)
-        // 写入当前书覆盖层（非空时才落盘）
+        // 从 JS 回传的完整 JSON 解析为全量设置
+        val full = ReaderSettings.fromJson(json)
+        // ① 书内覆盖层：仅排版类字段
+        val overlay = BookSettings.fromReaderSettings(full)
         if (bookId >= 0) bookSettingsStore.save(bookId, overlay)
-        // 回写全局记忆（逐项传染）
-        settingsStore.saveMerged(overlay)
-        log("saveSettings -> overlay applied")
+        // ②③ 全局：覆盖层回写（传染）+ 纯全局字段直接持久化（亮度/护眼/手势/续读/页码等）
+        val global = settingsStore.load()
+            .mergeFrom(overlay)
+            .copy(
+                useUserScripts = full.useUserScripts,
+                autoContinue = full.autoContinue,
+                pageNum = full.pageNum,
+                brightness = full.brightness,
+                brightnessFollowSystem = full.brightnessFollowSystem,
+                brightnessOffset = full.brightnessOffset,
+                eyeProtection = full.eyeProtection,
+                eyeProtectionLevel = full.eyeProtectionLevel,
+                brightnessGestureLeft = full.brightnessGestureLeft,
+                brightnessGestureRight = full.brightnessGestureRight,
+                brightnessGestureTwo = full.brightnessGestureTwo,
+            )
+        settingsStore.save(global)
+        log("saveSettings -> overlay=${overlay.toJson()}")
         return true
     }
 

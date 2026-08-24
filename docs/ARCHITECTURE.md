@@ -161,7 +161,33 @@
 | 阅读主题 | 全局记忆 + 每书私有，逐项回写 | 书内日夜配色 |
 | 翻页动画 | 全局记忆 + 每书私有，逐项回写 | 动画开关 / 未来动画模式 |
 
-当前存储现状与差距：`ReaderSettings`（全局全量单对象，存 `filesDir/settings/reader.json`）仅覆盖"全局"维度；书籍私有维度尚未建立（`BookReadingState` 只存进度/定位）。本分层方案即补齐"每本书私有副本 + 全局记忆逐项回写"两条链路。
+**实现落地**：`ReaderSettings`（全局全量单对象，存 `filesDir/settings/reader.json`）+ `BookSettings`（每书私有覆盖层，存 `settings/books/{bookId}.json`）。读取 = `全局.applyOverlay(私有覆盖层)` 一次合并；写入 = 覆盖层字段写书内副本并 `mergeFrom` 回写全局、纯全局字段直接写全局。
+
+#### 逐项读写核查表（按设置面板从上到下，是/否 = 实际代码路径）
+
+| 设置项 | 字段 | 私有写入 | 私有读出 | 全局写入 | 全局读出 | 归类 |
+|---|---|---|---|---|---|---|
+| 排版主题 | `layoutTheme` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 页边距·上/下/左/右 | `marginTop/Bottom/Left/Right` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 行距 | `lineSpacing` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 段间距 | `paragraphSpacing` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 疏密 | `paragraphGap` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 字号 | `fontScale` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 字体·正文/标题/代码/粗/斜 | `fontBody/Title/Code/Bold/Italic` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 文字颜色 | `fgOverride` | 是 | 是 | 是 | 是 | 阅读主题·传染 |
+| 背景颜色 | `bgOverride` | 是 | 是 | 是 | 是 | 阅读主题·传染 |
+| 日夜配色（工具栏 ☾） | `scheme` | 是 | 是 | 是 | 是 | 阅读主题·传染 |
+| 翻页动画 | `pageAnim` | 是 | 是 | 是 | 是 | 排版·传染 |
+| 亮度·跟随系统 | `brightnessFollowSystem` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 亮度·偏移量 | `brightnessOffset` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 亮度·绝对值 | `brightness` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 护眼·开关 | `eyeProtection` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 护眼·过滤量 | `eyeProtectionLevel` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 手势·左/右/双指 | `brightnessGesture*` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 启动时继续阅读 | `autoContinue` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+| 显示页码 | `pageNum` | 否 | 否 | 是 | 是 | 环境·纯全局 |
+
+> 归类说明：**排版 / 阅读主题 / 翻页动画**（传染）= 书内覆盖层 + 逐项回写全局，下本未设的书默认继承；**环境（亮度/护眼/手势/续读/页码）** = 纯全局，书内只做入口调节、不入书副本。每项读写在面板改动时即时落盘（`applySettings(true)` / `saveSettings()`）。
 
 ---
 
