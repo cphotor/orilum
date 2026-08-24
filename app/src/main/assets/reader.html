@@ -300,7 +300,10 @@
     font-size: 10px;
     padding: 6px 12px;
     cursor: pointer;
+    border-radius: 8px; /* 让按压高亮成圆角块，观感接近 Material ripple */
+    transition: background 0.15s ease, transform 0.1s ease;
   }
+  .tool:hover:active { background: rgba(255,255,255,0.12); transform: scale(0.92); }
   .tool .ic { font-size: 20px; line-height: 1; }
   #status {
     position: absolute;
@@ -315,7 +318,8 @@
     transition: opacity 0.3s;
   }
   #status.show { opacity: 1; }
-  #bar-top button { pointer-events: auto; }
+  #bar-top button { pointer-events: auto; border-radius: 8px; transition: background 0.15s ease, transform 0.1s ease; }
+  #bar-top button:hover:active { background: rgba(255,255,255,0.12); transform: scale(0.92); }
 
   /* ── 目录抽屉 ─────────────────────────── */
   #toc-wrap {
