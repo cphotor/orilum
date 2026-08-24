@@ -700,14 +700,13 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                     fontSize = 12.sp,
                 )
             }
-            // 删除钮：紧贴文字右侧，Y 级整体的一部分；自身再右移 yPx 藏在面板右缘外，滑动时随之进入。
+            // 删除钮：紧贴文字右侧，是整体的一部分；自身再右移 yPx 藏在面板右缘外（被 clipToBounds 裁掉），滑动时随之进入。
+            // 贴右缘、上下顶满：无圆角、无内边距，滑到极限时红色右缘恰好对齐屏幕边界。
             Box(
                 modifier = Modifier
                     .offset { IntOffset(yPx.roundToInt(), 0) }
                     .width(yDp)
                     .fillMaxHeight()
-                    .padding(vertical = 8.dp, horizontal = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
                     .background(DeleteRed)
                     .clickable { onDelete(face) },
                 contentAlignment = Alignment.Center,
