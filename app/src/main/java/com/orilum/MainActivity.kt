@@ -13,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -684,12 +685,19 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                         onDragEnd = {
                             scope.launch {
                                 // 左滑到删除区 → 吸附删除态(-yPx)；右滑/未左移 → 回 0；越界右空 → 弹回 0。
+                                // offsetX 用低阻尼比 spring：惯性冲到目标位置时适度跑过头，再由弹力拉回（iOS 手感）。
                                 val target = if (offsetX.value < 0f) {
                                     if (dragDir.value < 0f) -yPx else 0f
                                 } else {
                                     0f
                                 }
-                                offsetX.animateTo(target, spring())
+                                offsetX.animateTo(
+                                    target,
+                                    spring(
+                                        stiffness = Spring.StiffnessMediumLow,
+                                        dampingRatio = 0.5f, // <1 → 过冲后回弹
+                                    ),
+                                )
                                 overBest.animateTo(0f, spring())
                             }
                         },
