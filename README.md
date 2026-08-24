@@ -1,7 +1,7 @@
 # Orilum
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.2.3-blue.svg)](https://github.com/cphotor/orilum/releases/tag/v0.2.3)
+[![Version](https://img.shields.io/github/v/tag/cphotor/orilum?sort=semver&label=version)](https://github.com/cphotor/orilum/tags)
 
 Orilum 是一款面向安卓平板与手机的 EPUB 阅读器，计划是做**最尊重原版样式的** EPUB 阅读器——适合对书籍排版有苛刻要求的阅读者。
 
