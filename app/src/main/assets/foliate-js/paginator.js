@@ -1164,39 +1164,11 @@ export class Paginator extends HTMLElement {
     }
 
     async snap(vx, vy) {
-        // 双翻修复：方向与目标都基于「拖动前」的静止基准 #scrollBounds[0]，一次手势至多翻一页。
-        // 背景：touchend 大幅滑动时 touchmove 已用 scrollBy 把位置推进到相邻页预览，若直接用当前
-        // position 反推页号再加速度，会把「预览已推进的一页」又叠一次（距离+速度双判据同时命中 → 翻两页）。
-        const size = this.size
-        const rest0 = this.#scrollBounds?.[0] ?? this.start
-        const delta = this.#scrollBounds?.length ? (this.containerPosition - rest0) : 0
-        // 小于半页视为未真正越界（小幅/回滑），只按速度方向翻一页；越过半页则按已推进方向翻一页。
-        // dir ∈ {-1, 0, 1}，恒为整数页，绝不卡在两页之间。
-        const THRESH = size / 2
-        let dir
-        if (Math.abs(delta) > THRESH) dir = delta > 0 ? 1 : -1
-        else {
-            const velocity = this.#vertical ? vy : vx
-            dir = velocity > 0 ? 1 : velocity < 0 ? -1 : 0
-        }
-        if (!dir) return this.#scrollToPage(this.#clampPage(Math.round(rest0 / size)), 'snap')
-        // 目标 = 拖动前静止整页 + dir（仅一次，不叠加位移）
-        const target = this.#clampPage(Math.round(rest0 / size) + dir)
+        // 单一阈值设计：snap 只负责「回弹到手势起点那一页」，不做方向/半页判定；
+        // 方向翻页（前/后）由 reader 按固定阈值走 next()/prev()。消除与阈值重复的多处半页判据。
         await this.#settleWindow()
-        // 决策点诊断（每次手势一条）：事件类型 / 滑动前后容器可滚宽 / 目标页 / 当前尺寸与像素最高可滚
-        try {
-            const g = window.__gesture || {}
-            const diag = {
-                hop: 'snap', ev: g.type || '?', sw0: g.sw0 ?? -1, sw1: g.sw1 ?? -1,
-                size: +this.size.toFixed(3), start: +this.start.toFixed(1), rest0: +rest0.toFixed(1),
-                delta: +delta.toFixed(1), dir, target, lastC: this.#lastContentPage,
-                maxScroll: +(this.#container.scrollWidth - this.#container.clientWidth).toFixed(1),
-                viewSize: +this.viewSize.toFixed(1),
-            }
-            if (typeof EPUBBridge !== 'undefined' && EPUBBridge.diagnosticPaginationInfo)
-                EPUBBridge.diagnosticPaginationInfo(JSON.stringify(diag))
-        } catch (e) { /* 诊断失败不影响阅读 */ }
-        return this.#scrollToPage(target, 'snap')
+        const rest0 = this.#scrollBounds?.[0] ?? this.start
+        return this.#scrollToPage(this.#clampPage(Math.round(rest0 / this.size)), 'snap')
     }
     /** snap 输出目标页号的第二层边界保险：夹紧到有效内容页 [firstContentPage, lastContentPage]。
      *  B 模型只做纯算术 target=round(rest0/size)+dir，已移除 A 模型自带的末端归一化兜底；
@@ -1348,45 +1320,6 @@ export class Paginator extends HTMLElement {
         // 迁移/补偿可能改变了滚动位置，刷新吸附边界（scrollBounds），
         // 保证下一次 snap 的 min/max 基于最新的实际位置而非迁移前的偏移。
         const { size } = this
-        // 诊断：末章内每次 snap/page 落位都输出（低频率，规避 OriginOS 250/s 限流）。
-        // 捕获“跨中线松手卡半屏”那一刻的真实 start（一次性会在首次 settle 触发，错失卡住点）。
-        const windowLast = [...this.#viewMap.keys()].sort((a, b) => a - b).pop()
-        if (reason === 'snap' || reason === 'page') {
-            if (this.#index === windowLast && this.page >= this.#lastContentPage - 2) {
-                const offs = {}
-                for (const [i, o] of this.#offsets) offs[i] = +o.toFixed(1)
-                try {
-                    // 列参数：主 view 内容注册（列宽 / 列距 / 实际可滚动宽 / 首个文本左缘）
-                    const mv = this.#viewMap.get(this.#index)
-                    const doc = mv?.document
-                    let colP = {}
-                    if (doc) {
-                        const de = doc.documentElement
-                        const cs = doc.defaultView.getComputedStyle(de)
-                        const firstText = de.querySelector('p, h1, h2, h3, li, div')
-                        const fr = firstText?.getBoundingClientRect()
-                        colP = {
-                            colW: parseFloat(cs.getPropertyValue('column-width')) || -1,
-                            colGap: parseFloat(cs.getPropertyValue('column-gap')) || -1,
-                            docScrollW: de.scrollWidth, docClientW: de.clientWidth,
-                            mainPc: mv?.pageCount, mainOffset: +((this.#offsets.get(this.#index) ?? 0) / size).toFixed(2),
-                            firstTextX: fr ? +fr.left.toFixed(1) : -1,
-                        }
-                    }
-                    const diag = {
-                        idx: this.#index, size: +size.toFixed(3), start: +this.start.toFixed(1),
-                        frac: +(this.start / size).toFixed(3), page: this.page,
-                        lastContent: this.#lastContentPage, firstContent: this.#firstContentPage,
-                        pages: this.pages, viewSize: +this.viewSize.toFixed(1),
-                        maxScroll: +(this.#container.scrollWidth - this.#container.clientWidth).toFixed(1),
-                        scrollW: this.#container.scrollWidth, clientW: this.#container.clientWidth,
-                        lastIdx: windowLast, offs, colP,
-                    }
-                    if (typeof EPUBBridge !== 'undefined' && EPUBBridge.diagnosticPaginationInfo)
-                        EPUBBridge.diagnosticPaginationInfo(JSON.stringify(diag))
-                } catch (e) { /* 诊断失败不影响阅读 */ }
-            }
-        }
         this.#scrollBounds = [this.containerPosition, this.atStart ? 0 : size, this.atEnd ? 0 : size]
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
@@ -1447,11 +1380,14 @@ export class Paginator extends HTMLElement {
                 Math.max(0, this.start - (distance ?? this.size)), null, true)
             return !this.atStart
         }
-        if (this.atStart) return
+        // 边界早退以「起手指前静止页 rest」为准，而非预览抬高后的 this.page：
+        // 过半屏预览会把 this.page 顶到首页令 atStart 误判，吞掉回补首页的动画（与末页卡半屏对称）。
+        const restPrev = this.#scrollBounds?.[0] ?? this.start
+        const restPagePrev = Math.floor((restPrev + this.size / 2) / this.size)
+        if (restPagePrev <= this.#firstContentPage) return
         // 以「拖动前」的静止位置（#scrollBounds[0]）为基准：拖动预览期间 #scrollBounds 不更新，
         // 若用 this.page（拖动后的当前页）再 -1，会把预览已翻过的一页再叠一次（每次回翻多翻一页）。
-        const rest = this.#scrollBounds?.[0] ?? this.start
-        const page = Math.floor((rest + this.size / 2) / this.size) - 1
+        const page = restPagePrev - 1
         // 目标页仍在窗口可读范围内：无缝回翻（跨章直接滚回相邻章内容，不跳章节）。
         // 左边界不能用固定的「全局页 1」——窗口滑动后左侧章节可能已卸载，
         // 其区域是空白缓冲列。必须取当前窗口内第一节的实际正文起始页。
@@ -1470,11 +1406,14 @@ export class Paginator extends HTMLElement {
                 Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
             return !this.atEnd
         }
-        if (this.atEnd) return
+        // 边界早退以「起手指前静止页 rest」为准，而非预览抬高后的 this.page：
+        // 过半屏预览会把 this.page 顶到末页令 atEnd 误判早退，吞掉补足末页的动画 → 卡半屏（100%复现）。
+        const restNext = this.#scrollBounds?.[0] ?? this.start
+        const restPageNext = Math.floor((restNext + this.size / 2) / this.size)
+        if (restPageNext >= this.#lastContentPage) return
         // 与 #scrollPrev 对称：以「拖动前」的静止位置（#scrollBounds[0]）为基准 +1，
         // 而不是用拖动后的 this.page 再 +1（大幅拖动时会把预览已翻过的一页再叠一次，每翻多翻一页）。
-        const rest = this.#scrollBounds?.[0] ?? this.start
-        const page = Math.floor((rest + this.size / 2) / this.size) + 1
+        const page = restPageNext + 1
         // 窗口内最后一个可读内容页（末章右侧 1 屏空白缓冲列不可停留）。
         // 目标页仍在窗口可读范围内：无缝推进（跨章直接滚入相邻章内容，不跳回章节开头）。
         if (page <= this.#lastContentPage)

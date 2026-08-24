@@ -2198,9 +2198,6 @@ addEventListener('touchstart', e => {
   const isBright = resolveBrightGesture(e.touches)
   if (!isBright && e.touches.length !== 1) return
   const t = e.touches[0]
-  // 手势诊断：记录手指起点时容器可滚宽（viewSize 作 scrollWidth 代理），供 snap 对比滑动前后是否发生 columns 重排跳变
-  const r0 = view?.renderer
-  window.__gesture = { type: 'touchstart', sw0: r0?.viewSize ?? -1, sw1: -1, t: performance.now() }
   touch = {
     startX: t.clientX, startY: t.clientY,
     time: e.timeStamp, dx: 0, lastX: t.clientX, lastY: t.clientY, vx: 0, vy: 0, active: true,
@@ -2256,8 +2253,6 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
-  const r1 = view?.renderer
-  if (window.__gesture) { window.__gesture.type = 'touchend'; window.__gesture.sw1 = r1?.viewSize ?? -1 }
   // 亮度手势已激活且确实调节了亮度：仅保存亮度，不做翻页/吸附。
   // 注意：边缘区域被判为亮度手势、但实际是水平滑动时（未触发亮度，lastBright 仍为 null），
   // 绝不能提前 return，否则缺少 snap/next/prev，小幅滑会卡在“两页之间”无法吸附。
@@ -2267,18 +2262,15 @@ addEventListener('touchend', e => {
   }
   const r = view.renderer
   if (!r) return
-  if (touch.dx <= -SWIPE_LIMIT) r.next()          // 左滑 → 下一页
-  else if (touch.dx >= SWIPE_LIMIT) r.prev()      // 右滑 → 上一页
-  // 位移不足 → 吸附回当前页。
-  // 注意：snap 约定 vx>0 为前进（与 paginator 内部 #onTouchMove 的 dx=(上次-当前) 一致），
-  // 而这里 vx=(当前-上次)，故取反，否则小幅回滑会误判为向前翻（出现"显示本章第二页"）。
-  else r.snap(-touch.vx, -touch.vy)
+  // 单一固定滑动阈值：|dx|<=T → 回弹当前页；|dx|>T → 翻页动画按方向继续。只此一处判断，不做重复半页判定。
+  const SWIPE = 100
+  if (touch.dx <= -SWIPE) r.next()            // 左滑超过阈值 → 前翻（动画继续）
+  else if (touch.dx >= SWIPE) r.prev()        // 右滑超过阈值 → 后翻（动画继续）
+  else r.snap(-touch.vx, -touch.vy)           // 未过阈值 → 回弹当前页
 }, { passive: true })
 
 addEventListener('touchcancel', () => {
   touch.active = false
-  const r1 = view?.renderer
-  if (window.__gesture) { window.__gesture.type = 'touchcancel'; window.__gesture.sw1 = r1?.viewSize ?? -1 }
 }, { passive: true })
 
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
