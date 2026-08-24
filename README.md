@@ -103,6 +103,22 @@ app/
 - `downloadFoliateJs` / `fetchFoliateJs` —— 从 npmmirror 下载并解包 foliate-js 到 `assets/foliate-js`（**排除官方 `paginator.js`**，保留本地定制版；该文件已 force-add 纳入版本控制）。
 - `makeSampleEpub` —— 把 `sample-epub-src/` 打包成合法 EPUB3（mimetype 首条目 + STORED）到 `assets/sample/sample.epub`。
 
+### CI 自动构建（GitHub Actions）
+
+打 `v*` tag（如 `vX.Y.Z`）即触发云端编译，自动产出**已签名 APK** 并挂到对应 GitHub Release。密钥通过 GitHub Secrets 注入，**永远不入库**：
+
+| 触发 | 行为 |
+|---|---|
+| 推送 `v*` tag | 云端 `assembleRelease` → 签名 → 签名 APK 挂到 Release |
+| 手动 `workflow_dispatch` | 仅构建，APK 存为 Actions artifact，便于验证 |
+
+签名机制：
+1. `settings → Secrets and variables → Actions` 配置 4 个 Secrets：`KEYSTORE_B64`（jks 转 base64）、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。
+2. 构建时 workflow 从 `KEYSTORE_B64` 解码出**临时 jks**（仅存在于云端 `runner.temp`），经环境变量注入 `app/build.gradle.kts` 的 `release` 签名配置。
+3. 构建结束虚拟机销毁，临时 jks 随之消失，仓库与 Release 均不残留密钥文件。
+
+> 本地无 Secrets 时，`assembleRelease` 会回退用 debug 签名，仅作安装调试用；正式分发请走 CI 的 Release 产物。
+
 ---
 
 ## 排版引擎

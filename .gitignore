@@ -3,6 +3,8 @@
 build/
 local.properties
 *.jks
+# 本机签名密钥与凭证（仅用于本地/CI 上传 Secrets，绝不可入库）
+keystore/
 
 # IDE
 .idea/

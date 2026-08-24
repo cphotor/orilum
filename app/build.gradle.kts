@@ -28,6 +28,21 @@ android {
         }
     }
 
+    // Release 签名材料由 GitHub Actions 在运行时从 Secrets 解码注入（不入库）。
+    // 读取环境变量：KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD。
+    // 本地未注入这些变量时，signingConfig 保持为空，release 回退用 debug 签名以便安装调试。
+    signingConfigs {
+        create("release") {
+            val keystoreFile = System.getenv("KEYSTORE_FILE")
+            if (keystoreFile != null) {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -35,6 +50,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // CI 注入密钥时用真实 release 签名；本地无密钥时回退 debug 签名，避免构建失败。
+            signingConfig = if (System.getenv("KEYSTORE_FILE") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -149,6 +170,11 @@ val makeSampleEpub by tasks.registering {
 }
 
 afterEvaluate {
-    tasks.named("mergeDebugAssets") { dependsOn(makeSampleEpub) }
-    tasks.named("mergeReleaseAssets") { dependsOn(makeSampleEpub) }
+    // 构建期先打包示例书，供读写 assets 的任务消费：
+    // 编译打包要合并 assets（merge*Assets），release 的 lint 静态检查也要读 assets 下的 sample.epub（generateReleaseLintVital*）。
+    tasks.matching { t ->
+        t.name == "mergeDebugAssets" ||
+        t.name == "mergeReleaseAssets" ||
+        t.name.contains("lintVital", ignoreCase = true)
+    }.configureEach { dependsOn(makeSampleEpub) }
 }

@@ -8,6 +8,16 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
+## 近期更新 · CI 自动构建（签名 Release）
+
+> 打通 GitHub Actions 云端编译，打 `v*` tag 自动产出已签名 APK 并挂到 Release。
+
+- **release 签名注入**：`app/build.gradle.kts` 新增 `signingConfigs.release`，从环境变量 `KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD` 读取签名材料；本地未注入时回退 debug 签名，避免本地 release 构建失败。
+- **密钥安全**：jks 以 base64 存入 GitHub Secrets（`KEYSTORE_B64`），workflow 运行时解码出临时 jks（仅存云端 `runner.temp`），构建结束虚拟机销毁即消失，仓库与 Release 均不残留密钥文件。`.gitignore` 已忽略 `*.jks`。
+- **工作流**：`.github/workflows/build-release.yml` —— `push v*` tag 或 `workflow_dispatch` 触发；`setup-java 17` → 解码密钥 → `assembleRelease` → 上传 APK（artifact + tag 时挂 Release）。
+
+---
+
 ## 近期更新 · 三章缓存翻页与首屏定位修复
 
 > 针对水平分页的多 View 拼接引擎做了一次系统性修正，解决「章间来回翻出现空白页」与「打开书首屏左边距偏小」两类问题。
