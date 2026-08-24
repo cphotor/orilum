@@ -12,18 +12,20 @@ import androidx.room.PrimaryKey
  *
  * @param source 目前固定为 "imported"。字节在 [path]（`filesDir/fonts/` 下私有副本），
  *  经 `/fonts/{id}` 虚拟域 url() 加载。
+ * @param subfamily 字重/样式(nameID=2，如 Regular/Bold/509R)。**空串代表"无独立字重名"**；
+ *  同家族不同字重文件以 `(familyName, subfamily)` 并存，供渲染时多份 @font-face 归档（加粗/斜体用真字重）。
  * @param lang [FontClassifier] 分类结果（cjk/latin/generic），["symbol"/"invalid"] 不作为候选。
  */
 @Entity(
     tableName = "font_faces",
-    indices = [Index(value = ["familyName", "source"], unique = true)],
+    indices = [Index(value = ["familyName", "subfamily", "source"], unique = true)],
 )
 data class FontFace(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val familyName: String,
     val displayName: String,
-    /** 字重/样式(nameID=2，如 Regular/Bold)；同家族多字重文件并存时用于挑选保留的代表文件。 */
-    val subfamily: String? = null,
+    /** 字重/样式(nameID=2，如 Regular/Bold/509R)；空串 = 无字重名。同家族多字重文件逐一保留，渲染按字重归档。 */
+    val subfamily: String = "",
     val source: String = SOURCE_IMPORTED,
     val path: String?,
     val lang: String,

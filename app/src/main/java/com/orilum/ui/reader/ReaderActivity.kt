@@ -75,31 +75,9 @@ class ReaderActivity : ComponentActivity() {
     /** 状态栏已彻底隐藏后再把其色置透明的延迟任务：保持隐藏过程深灰回缩、不露出阅读底色。 */
     private var hideBarTransparentRunnable: Runnable? = null
 
-    /** 持久化字体目录 uri 等跨启动状态。 */
-    private val prefs by lazy { getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE) }
-
     /** 上次保存的 locator JSON；供 reader.html 在 init 时回传以恢复位置。 */
     @Volatile
     private var savedLocator: String? = null
-
-    /** 指定字体目录（SAF 目录树）→ 设为当前字体目录（内部持久化权限并扫描），完成后回调 JS 刷新列表。 */
-    private val pickFontDirLauncher =
-        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            if (uri == null) return@registerForActivityResult
-            scope.launch(Dispatchers.IO) {
-                val res = fontRepository.setDirectory(uri)
-                prefs.edit().putString(KEY_FONT_DIR, uri.toString()).apply()
-                FileLogger.i(TAG, "pickFontDir -> ${res.size} fonts")
-                // 回到主线程执行 WebView JS（evaluateJavascript 必须在 UI 线程），刷新字体列表
-                withContext(Dispatchers.Main) {
-                    webView.evaluateJavascript(
-                        "window.folioWebView && window.folioWebView.onFontsChanged && " +
-                            "window.folioWebView.onFontsChanged()",
-                        null,
-                    )
-                }
-            }
-        }
 
     private val assetLoader: WebViewAssetLoader by lazy {
         WebViewAssetLoader.Builder()
@@ -112,10 +90,10 @@ class ReaderActivity : ComponentActivity() {
             .build()
     }
 
-    /** 提供某个字体候选 key 的源文件字节（从已持久化的目录 uri 直接读，删源即消失），供 CSS url() 加载。 */
+    /** 提供某个字体候选的源文件字节（按 `FontFace.id` 定位私有副本），供 CSS url() 加载。 */
     private val fontHandler = WebViewAssetLoader.PathHandler { path ->
-        val key = decodeUrlKey(path)
-        val data = key?.let { fontRepository.fontBytes(it) } ?: return@PathHandler null
+        val id = decodeUrlKey(path)?.toLongOrNull()
+        val data = id?.let { fontRepository.fontBytes(it) } ?: return@PathHandler null
         val mime = path.substringAfterLast('.', "ttf").lowercase().let { ext ->
             if (ext == "otf" || ext == "otc") "font/otf" else "font/ttf"
         }
@@ -205,19 +183,7 @@ class ReaderActivity : ComponentActivity() {
         repository = BookRepository(AppDatabase.get(this).bookDao())
         settingsStore = ReaderSettingsStore(File(filesDir, "settings"))
         bookSettingsStore = BookSettingsStore(File(filesDir, "settings"))
-        fontRepository = FontRepository(this)
-        // 恢复上次选择并持久化的字体目录（含其 SAF 权限），使字体候选跨重启保持
-        prefs.getString(KEY_FONT_DIR, null)?.let { savedTree ->
-            runCatching { Uri.parse(savedTree) }.getOrNull()?.let { tree ->
-                scope.launch(Dispatchers.IO) {
-                    val n = fontRepository.setDirectory(tree).size
-                    FileLogger.i(TAG, "restored font dir -> $n fonts")
-                    withContext(Dispatchers.Main) {
-                        webView?.evaluateJavascript("window.folioWebView?.onFontsChanged?.()", null)
-                    }
-                }
-            }
-        }
+        fontRepository = FontRepository(this, AppDatabase.get(this).fontDao())
         if (bookId >= 0) {
             // 启动前同步预载上次定位，保证 reader.html 的 getSavedLocator 稳定返回
             savedLocator = kotlinx.coroutines.runBlocking { repository.readingState(bookId)?.locator }
@@ -318,7 +284,6 @@ class ReaderActivity : ComponentActivity() {
                 bookSettingsStore,
                 { bookId },
                 fontRepository,
-                { exitImmersiveAndPickFontDir() },
                 { finish() },
                 bottomInset(),
                 topInset(),
@@ -399,23 +364,6 @@ class ReaderActivity : ComponentActivity() {
         val c = WindowInsetsControllerCompat(window, window.decorView)
         c.show(WindowInsetsCompat.Type.statusBars())
         c.hide(WindowInsetsCompat.Type.navigationBars())
-    }
-
-    /** 完全退出沉浸式：恢复状态栏与导航栏（用于临时退出全屏，如 SAF 目录选择）。 */
-    private fun exitImmersive() {
-        WindowInsetsControllerCompat(window, window.decorView)
-            .show(WindowInsetsCompat.Type.systemBars())
-    }
-
-    /** 临时退出沉浸式再启动字体目录选择：vivo 目录选择器(SAF)在全屏宿主下会错误计算
-     *  insets，把「选择此文件夹」确认按钮压到手势区外导致无法确认；退出全屏规避。 */
-    private fun exitImmersiveAndPickFontDir() {
-        leaveImmersive()
-        pickFontDirLauncher.launch(null)
-    }
-
-    private fun leaveImmersive() {
-        exitImmersive()
     }
 
     private fun reapplyImmersive() {
@@ -547,7 +495,6 @@ class EPUBBridge(
     private val bookSettingsStore: BookSettingsStore,
     private val bookIdProvider: () -> Long,
     private val fontRepository: FontRepository,
-    private val pickFontDirectory: () -> Unit,
     private val exit: () -> Unit,
     private val bottomInset: Int,
     private val topInset: Int,
@@ -631,26 +578,38 @@ class EPUBBridge(
     @JavascriptInterface
     fun setSystemBarsVisible(show: Boolean) = setSystemBarsVisibility(show)
 
-    /** 返回当前字体目录候选 JSON 数组：`[{key,name,lang}]`（仅可用字体；删源即消失）。 */
+    /**
+     * 返回已导入字体池的**家族结构** JSON 数组：
+     * `[{family, name, lang, weights:[{id, subfamily}]}]`
+     * 同一家族的多字重文件归并成一个条目（渲染按字重归档成多份 @font-face）。
+     * 仅 cjk/latin/generic；`subfamily` 空串代表无字重名。
+     */
     @JavascriptInterface
     fun listFonts(): String {
         val fonts = kotlinx.coroutines.runBlocking { fontRepository.list() }
+        val byFamily = fonts.groupBy { it.familyName }
         val arr = org.json.JSONArray()
-        fonts.forEach { f ->
+        byFamily.forEach { (family, members) ->
+            val weights = org.json.JSONArray()
+            members.forEach { m ->
+                weights.put(
+                    org.json.JSONObject().apply {
+                        put("id", m.id)
+                        put("subfamily", m.subfamily)
+                    },
+                )
+            }
             arr.put(
                 org.json.JSONObject().apply {
-                    put("key", f.key)
-                    put("name", f.name)
-                    put("lang", f.lang)
+                    put("family", family)
+                    put("name", members.first().displayName)
+                    put("lang", members.first().lang)
+                    put("weights", weights)
                 },
             )
         }
         return arr.toString()
     }
-
-    /** 触发系统字体目录选择（SAF 目录树），选择后导入字体池并回调 JS. */
-    @JavascriptInterface
-    fun pickFontDirectory() = (this.pickFontDirectory)()
 
     /** 顶部「返回书架」：正常退出阅读器（不触发任何翻页）。 */
     @JavascriptInterface
@@ -672,8 +631,6 @@ class EPUBBridge(
 const val EXTRA_BOOK_PATH = "book_file_path"
 /** 由书架启动阅读器时传入的书主键（>=0 才存取进度）。 */
 const val EXTRA_BOOK_ID = "book_id"
-/** SharedPreferences 里持久化的字体目录树 uri 键。 */
-const val KEY_FONT_DIR = "font_dir_uri"
 
 private const val ASSET_BASE = "https://appassets.androidplatform.net/"
 private const val TAG = "Orilum.Reader"

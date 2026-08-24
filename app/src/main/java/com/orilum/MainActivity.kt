@@ -4,10 +4,14 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,7 +27,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,28 +37,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.orilum.data.book.AppDatabase
 import com.orilum.data.book.Book
 import com.orilum.data.book.BookImporter
 import com.orilum.data.book.BookRepository
+import com.orilum.data.font.FontFace
+import com.orilum.data.font.FontRepository
 import com.orilum.data.settings.ReaderSettingsStore
 import com.orilum.ui.reader.EXTRA_BOOK_ID
 import com.orilum.ui.reader.EXTRA_BOOK_PATH
@@ -74,6 +88,9 @@ class MainActivity : ComponentActivity() {
 
     /** 阅读配置；autoContinue 决定启动书架时是否自动进入最后阅读的书。 */
     private val settingsStore by lazy { ReaderSettingsStore(File(filesDir, "settings")) }
+
+    /** 字体池仓库（导入式，接 FontDao；跨重启持久）。 */
+    private val fontRepository by lazy { FontRepository(this, AppDatabase.get(this).fontDao()) }
 
     /** 记录最后打开的书主键，供「打开时续读」冷启动跳转。 */
     private val prefs by lazy { getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE) }
@@ -98,6 +115,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             OrilumTheme {
                 var gridMode by rememberSaveable { mutableStateOf(false) }
+                var showSettings by rememberSaveable { mutableStateOf(false) }
                 val pickEpub = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocument(),
                 ) { uri ->
@@ -106,15 +124,20 @@ class MainActivity : ComponentActivity() {
 
                 val books by booksFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
+                // 书架整屏为底层。设置面板以「右侧滑出抽屉」叠加于 Scaffold 的内容区之上——
+                // 其高度自动=「顶栏下方 → 底栏上方」的内容区高，绝不写死。
                 ShelfScreen(
                     books = books,
                     gridMode = gridMode,
                     onToggleView = { gridMode = !gridMode },
                     onImport = { pickEpub.launch(arrayOf("application/epub+zip")) },
                     onEdit = { toast("编辑（占位）") },
-                    onSettings = { toast("设置（占位）") },
+                    onSettings = { showSettings = !showSettings },
                     onOpenBook = { openReader(it) },
                     onOpenSample = { openSampleBook() },
+                    fontRepository = fontRepository,
+                    settingsOpen = showSettings,
+                    onDismissSettings = { showSettings = false },
                 )
             }
         }
@@ -245,6 +268,9 @@ private fun ShelfScreen(
     onSettings: () -> Unit,
     onOpenBook: (Book) -> Unit,
     onOpenSample: () -> Unit,
+    fontRepository: FontRepository,
+    settingsOpen: Boolean,
+    onDismissSettings: () -> Unit,
 ) {
     // 系统栏图标浅色已在 MainActivity.onCreate 统一设置（见 enableEdgeToEdge 后），此处无需重复。
 
@@ -275,29 +301,328 @@ private fun ShelfScreen(
             }
         },
     ) { padding ->
-        if (books.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = "书架上还没有书", style = MaterialTheme.typography.bodyLarge)
-                    Button(
-                        onClick = onOpenSample,
-                        modifier = Modifier.padding(top = 20.dp),
-                    ) {
-                        Text(text = "先看内置示例书（自测渲染）")
+        // 内容区：以 Box 承载书单列表，并在其上叠加设置抽屉（高度=padding 已裁掉标题栏/工具栏后的区域，不写死）。
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (books.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = "书架上还没有书", style = MaterialTheme.typography.bodyLarge)
+                        Button(
+                            onClick = onOpenSample,
+                            modifier = Modifier.padding(top = 20.dp),
+                        ) {
+                            Text(text = "先看内置示例书（自测渲染）")
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(books, key = { it.id }) { book ->
+                        BookCard(book = book, onClick = { onOpenBook(book) })
                     }
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+            // 设置抽屉浮于内容区顶部（右侧停靠）。
+            SettingsDrawer(
+                show = settingsOpen,
+                fontRepository = fontRepository,
+                onDismiss = onDismissSettings,
+            )
+        }
+    }
+}
+
+/** SAF 可选中的字体文件 MIME 类型（不同系统上报格式兼容）。 */
+private val FONT_MIMES = arrayOf(
+    "font/ttf", "font/otf", "font/woff", "font/woff2",
+    "application/x-font-ttf", "application/vnd.ms-opentype",
+    "application/octet-stream",
+)
+
+/**
+ * 书架设置面板的导航路由：多级下沉，一级「设置」主页列出可下钻项，点某项再进子页。
+ * 与阅读页设置抽屉相同的布局：窄屏近全屏、平板收窄为侧栏，后续新增设置项在此扩展路由。
+ */
+private sealed interface SettingsRoute {
+    val title: String
+    data object Home : SettingsRoute { override val title = "设置" }
+    data object Fonts : SettingsRoute { override val title = "字体" }
+}
+
+/** 抽屉面板配色，取自阅读页 reader.html 浅色主题 `--ui-bg` 族，保证两侧观感一致。 */
+private val PanelBg = Color(0xFFFAF8F4)
+private val PanelText = Color(0xFF2B2B2B)
+private val PanelMuted = Color(0xFF888888)
+private val PanelChevron = Color(0xFFBBBBBB)
+private val PanelDivider = Color(0xFFF0EDE6)
+private val PanelSlab = Color(0xFFEFECE4)
+
+/**
+ * 书架全局设置抽屉（「⚙ 设置」进入）：右侧停靠、滑入，风格对齐阅读页设置面板。
+ *
+ * 结构与阅读页一致：宽度写死（宽屏固定 360dp，窄屏 `min(360, 85vw)`）；高度由外层
+ * Scaffold 内容区约束决定，即「屏幕高 − 系统状态栏 − 标题栏 − 底部工具栏」，不写死。
+ * 无遮罩、无标题栏（子页时才在顶部显示一枚细返回箭头）。
+ *
+ * 面板内为多级下沉栈：一级「设置」主页 + 可下钻子页（当前「字体」），系统返回键逐级退栈、栈底关闭。
+ * 配色：浅色米白底 + 细分割线 + 行悬浮高亮，取自阅读页 `--ui-bg` 等变量，两侧观感统一。
+ */
+@androidx.compose.runtime.Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun SettingsDrawer(
+    show: Boolean,
+    fontRepository: FontRepository,
+    onDismiss: () -> Unit,
+) {
+    // 面板宽度写死，与阅读页设置面板一致：宽屏固定 360dp，窄屏 min(360, 85vw)。
+    val drawerWidth = with(androidx.compose.ui.platform.LocalConfiguration.current) {
+        if (screenWidthDp < 600) (screenWidthDp * 0.85f).dp else 360.dp
+    }
+
+    // 下沉导航栈：栈底 Home，push 下钻、pop 返回；抽屉关闭时重置回 Home。
+    val stack = remember { mutableStateListOf<SettingsRoute>(SettingsRoute.Home) }
+    val current = stack.last()
+
+    // 系统返回：先逐级退栈，栈底则关闭整个抽屉。
+    BackHandler(enabled = show) {
+        if (stack.size > 1) stack.removeAt(stack.lastIndex) else onDismiss()
+    }
+
+    // 字体池共享状态：主页显示已导入数量，字体子页导入/删除后刷新。
+    val scope = rememberCoroutineScope()
+    var fonts by remember { mutableStateOf<List<FontFace>>(emptyList()) }
+    LaunchedEffect(Unit) { fonts = fontRepository.list() }
+    val refreshFonts: suspend () -> Unit = { fonts = fontRepository.list() }
+
+    // SAF 多选字体文件 → 逐个导入，随后刷新列表
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            uris.forEach { runCatching { fontRepository.import(it) } }
+            refreshFonts()
+        }
+    }
+
+    AnimatedVisibility(
+        visible = show,
+        modifier = Modifier.fillMaxSize(),
+        enter = slideInHorizontally { it },
+        exit = slideOutHorizontally { it },
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 右侧停靠、填满内容区高度（顶栏下方 → 底栏上方）。
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .width(drawerWidth)
+                    .fillMaxHeight()
+                    .background(PanelBg),
             ) {
-                items(books, key = { it.id }) { book ->
-                    BookCard(book = book, onClick = { onOpenBook(book) })
+            // 顶行即标题行：中间「设置」粗体标题；左侧按层级显示返回「‹」，右侧常驻关闭「✕」。
+            // ✕ 样式与阅读页目录/设置面板的关闭按钮一致：transparent、继色、四周留白。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 8.dp),
+            ) {
+                if (stack.size > 1) {
+                    Text(
+                        text = "‹",
+                        color = PanelText,
+                        fontSize = 24.sp,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(horizontal = 4.dp)
+                            .clickable { stack.removeAt(stack.lastIndex) },
+                    )
+                }
+                Text(
+                    text = "设置",
+                    color = PanelText,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                Text(
+                    text = "✕",
+                    color = PanelText,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(8.dp)
+                        .clickable(onClick = onDismiss),
+                )
+            }
+            when (current) {
+                SettingsRoute.Home -> SettingsHomePage(
+                    fontsCount = fonts.size,
+                    onOpenFonts = { stack.add(SettingsRoute.Fonts) },
+                    modifier = Modifier.weight(1f),
+                )
+                SettingsRoute.Fonts -> ManageFontsPage(
+                    fonts = fonts,
+                    onImport = { importLauncher.launch(FONT_MIMES) },
+                    onDelete = { face -> scope.launch { fontRepository.delete(face); refreshFonts() } },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            }
+        }
+    }
+}
+
+/** 书架设置一级页：列出可下钻的设置项（当前只有「字体」）。 */
+@androidx.compose.runtime.Composable
+private fun SettingsHomePage(
+    fontsCount: Int,
+    onOpenFonts: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(modifier = modifier.fillMaxSize()) {
+        item {
+            SettingsEntry(
+                label = "字体",
+                value = if (fontsCount > 0) "已导入 $fontsCount 个" else null,
+                onClick = onOpenFonts,
+                hasDivider = false,
+            )
+        }
+    }
+}
+
+/** 一行可下钻设置项：label 左、当前值(若有)右中、› 最右，下方细分割线（对齐阅读页 .set-row）。 */
+@androidx.compose.runtime.Composable
+private fun SettingsEntry(
+    label: String,
+    value: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    hasDivider: Boolean = true,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = PanelText,
+                fontSize = 16.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (value != null) {
+                Text(
+                    text = value,
+                    fontSize = 13.sp,
+                    color = PanelMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+            }
+            Text(text = "›", color = PanelChevron, fontSize = 14.sp)
+        }
+        if (hasDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                thickness = 1.dp,
+                color = PanelDivider,
+            )
+        }
+    }
+}
+
+/**
+ * 书架设置二级页「字体」：SAF 多选导入（私有拷贝 + 解析分类入库，跨重启持久），
+ * 列出已导入字体、允许逐项删除。这里编辑的是全局字体池，供阅读页按家族选用替换原书字体。
+ */
+@androidx.compose.runtime.Composable
+private fun ManageFontsPage(
+    fonts: List<FontFace>,
+    onImport: () -> Unit,
+    onDelete: (FontFace) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxSize().background(PanelBg)) {
+        // 导入区：标题 + 扁平「导入字体…」按钮
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "字体导入",
+                color = PanelText,
+                fontSize = 16.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "导入字体…",
+                color = PanelText,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(PanelSlab)
+                    .clickable(onClick = onImport)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "导入后可在阅读页按家族指定替换原书字体。",
+            color = PanelMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            thickness = 1.dp,
+            color = PanelDivider,
+        )
+        if (fonts.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                Text(text = "尚未导入字体，点上方「导入字体…」添加", color = PanelMuted, fontSize = 14.sp)
+            }
+        } else {
+            fonts.forEach { face ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 名称 + 字重/语言
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = face.displayName, color = PanelText, fontSize = 15.sp)
+                        Text(
+                            text = listOfNotNull(face.subfamily, face.lang).ifEmpty { listOf("无字重名") }.joinToString(" · "),
+                            color = PanelMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    // 删除按钮
+                    Text(
+                        text = "✕",
+                        color = Color(0xFFB5544E),
+                        fontSize = 18.sp,
+                        modifier = Modifier
+                            .padding(start = 12.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onDelete(face) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
                 }
             }
         }

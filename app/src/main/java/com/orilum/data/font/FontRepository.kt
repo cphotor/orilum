@@ -1,118 +1,102 @@
 package com.orilum.data.font
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import androidx.documentfile.provider.DocumentFile
 import com.orilum.util.FileLogger
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 字体仓库：**直接引用用户指定的字体目录**，不做拷贝私有化、不做入库。
+ * 字体仓库：**主动导入 + 私有副本 + Room 持久化**。
  *
- * 设计取舍（对齐 moon+reader/多看）：用户 pick 一个字体目录后：
- *  - 通过 [com.orilum.ui.reader.ReaderActivity] 的 `takePersistableUriPermission` 把该目录树的
- *    读权限**持久化**，因此跨重启仍可读源文件（这正是 SAF 本应支持、早期因未持久化而「重启失效」的根因，现修复）。
- *  - 每次 [list] 时实时扫描目录内的 TTF/OTF/TTC 文件并解析分类，**一是**让「删除源文件后字体消失」
- *    自然成立；**二则**无需维护 DB 增量迁移。
- *  - 每个文件为一个独立候选（**不按字重合并**，一字重一文件，与 moon+reader 一致）。
- *  - 字节经 `/fonts/{key}` 虚拟域 url() 加载，[fontBytes] 从持久化 uri 直接 `openInputStream`。
+ * 与书店一致：用户通过「字体导入」选字体文件（SAF），本仓库把字节**拷贝进私有目录**
+ * `filesDir/fonts/`，解析分类后写入 `font_faces` 表（以 `(familyName, subfamily)` 去重，
+ * 同款同字重重导覆盖）。字体跨重启持久存在，删除源文件不影响（已有私有副本）；用户显式删除才会清掉。
  *
- * 通过 [Document] 缓存扫描结果，避免重复解析；`setDirectory` 时重新扫描。
- *
- * 字体候选只含「有效语言」字体（cjk/latin/generic），symbol/invalid 自动过滤。
+ * 设计取舍：
+ *  - 每张导入的字体文件 = 一条 `FontFace`（`path` 指向私有副本，`source=imported`），
+ *    字节经 `/fonts/{id}` 虚拟域 url() 加载（[fontBytes] 按 id 从私有路径直读）。
+ *  - 同一家族的不同字重文件（如思源黑体 Regular / Bold）以不同 `id` 并存；渲染时
+ *    reader 端按家族归档成多份 `@font-face`（同家族名 + 各自 font-weight/style 描述符）。
+ *  - 私有文件名 = `家族-字重.ext`，避免同家族多字重互相覆盖。
+ *  - 只保留「有效语言」字体（cjk/latin/generic），symbol/invalid 导入时自动拒绝。
  */
 class FontRepository(
     private val context: Context,
-    parser: FontParser = FontParser(),
+    private val fontDao: FontDao,
 ) {
     private val parser = FontParser()
     private val tag = "Orilum.Font"
 
-    /** 一个字体候选：key 为稳定标识（目录索引 + 文件名），供 `/fonts/{key}` 加载。 */
-    data class FontEntry(
-        val key: String,
-        val name: String,
-        val lang: String,
-        val uri: Uri,
-    )
+    /** 私有字体目录（不存在则创建）。 */
+    private val fontsDir: File
+        get() = File(context.filesDir, "fonts").apply { mkdirs() }
 
-    /** 当前生效的字体目录树 uri（已持久化权限）；null 表示尚未选择。 */
-    @Volatile
-    var directoryUri: Uri? = null
-        private set
+    /** 全部已导入字体（持久）。 */
+    suspend fun list(): List<FontFace> = fontDao.all()
 
-    /** 当前生效目录下的字体候选列表（按扫描顺序）。 */
-    @Volatile
-    var entries: List<FontEntry> = emptyList()
-        private set
-
-    /** 设置字体目录并持久化权限，随后立即扫描出候选列表。null 表示清除。 */
-    suspend fun setDirectory(uri: Uri?): List<FontEntry> = withContext(Dispatchers.IO) {
-        directoryUri = uri
-        if (uri == null) {
-            entries = emptyList()
-            return@withContext entries
+    /** 按 id 加载字体字节（key = `FontFace.id`）；文件被删/记录缺失返回 null。 */
+    fun fontBytes(id: Long): ByteArray? = runCatching {
+        val face = fontDao.byIdBlocking(id) ?: return null
+        val f = face.path?.let { File(it) } ?: return null
+        if (!f.exists()) {
+            // 私有副本意外丢失：清理失效记录，避免残留占位
+            fontDao.delete(face.id)
+            FileLogger.w(tag, "font file missing, cleaned id=$id family=${face.familyName}")
+            return null
         }
-        // 持久化读权限：取目录树 grant，跨重启有效（SAF 标准做法）
-        runCatching {
-            context.contentResolver
-                .takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }.onFailure {
-            FileLogger.w(tag, "takePersistableUriPermission 失败 $uri : $it")
-        }
-        entries = scan(uri)
-        FileLogger.i(tag, "setDirectory -> ${entries.size} fonts")
-        entries
-    }
-
-    /** 返回当前候选（不重复扫描；扫描在 [setDirectory] 已做）。 */
-    suspend fun list(): List<FontEntry> = entries
-
-    /** 按 key 读取字体字节；找不到或源文件已被删除则返回 null（「删源即消失」）。 */
-    fun fontBytes(key: String): ByteArray? = runCatching {
-        if (key.isBlank()) return null
-        val entry = entries.firstOrNull { it.key == key } ?: return null
-        context.contentResolver.openInputStream(entry.uri)?.use { it.readBytes() }
+        f.readBytes()
     }.getOrNull()
 
-    /** 扫描目录内所有字体文件并解析分类。 */
-    private fun scan(rootUri: Uri): List<FontEntry> {
-        val root = DocumentFile.fromTreeUri(context, rootUri) ?: return emptyList()
-        val files = mutableListOf<DocumentFile>()
-        collectFontFiles(root, files)
-        val out = mutableListOf<FontEntry>()
-        for (i in files.indices) {
-            val doc = files[i]
-            val fileName = doc.name ?: continue
-            val ext = fileName.substringAfterLast('.', "").lowercase()
-            if (ext !in FONT_EXTS) continue
-            val res = runCatching {
-                context.contentResolver.openInputStream(doc.uri)?.let { parser.parse(it) }
-            }.getOrNull() ?: continue
-            if (!res.valid) continue
-            val lang = FontClassifier.classify(res)
-            if (!FontClassifier.isUsable(lang)) continue
-            // 展示名用文件名（去扩展名）：第三方面体常以中文命名，比 name 表英文 Family 更贴近用户认知
-            out += FontEntry(
-                key = "${rootUri.lastPathSegment}_${i}_$fileName",
-                name = fileName.removeSuffix(".$ext"),
-                lang = lang,
-                uri = doc.uri,
-            )
+    /** 导入一个字体文件（SAF uri）→ 拷贝私有副本 + 解析分类 + 入库。返回更新后的全量列表。 */
+    suspend fun import(uri: Uri): List<FontFace> = withContext(Dispatchers.IO) {
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) {
+            FileLogger.w(tag, "import failed: cannot read $uri")
+            return@withContext fontDao.all()
         }
-        return out
+        val res = runCatching { bytes.inputStream().use { parser.parse(it) } }.getOrNull()
+        if (res == null || !res.valid) {
+            FileLogger.w(tag, "import rejected: not a parseable font $uri")
+            return@withContext fontDao.all()
+        }
+        val lang = FontClassifier.classify(res)
+        if (!FontClassifier.isUsable(lang)) {
+            FileLogger.w(tag, "import rejected: unusable lang=$lang $uri")
+            return@withContext fontDao.all()
+        }
+        val ext = uri.lastPathSegment?.substringAfterLast('.', "")?.lowercase()
+            ?.takeIf { it in FONT_EXTS } ?: "ttf"
+        val family = res.familyName?.takeIf { it.isNotBlank() } ?: "font"
+        // 字重归一为空串（无字重名）或原值；私有文件名含 family-subfamily 避免同家族多字重互相覆盖。
+        val sub = res.subfamily?.trim()?.takeIf { it.isNotBlank() } ?: ""
+        val safe = if (sub.isEmpty()) family else "$family-$sub"
+        val dest = File(fontsDir, "$safe.$ext")
+        dest.writeBytes(bytes)
+        fontDao.upsert(
+            listOf(
+                FontFace(
+                    familyName = family,
+                    displayName = dest.name.removeSuffix(".$ext"),
+                    subfamily = sub,
+                    source = FontFace.SOURCE_IMPORTED,
+                    path = dest.absolutePath,
+                    lang = lang,
+                ),
+            ),
+        )
+        FileLogger.i(tag, "imported family=$family subfamily=${if (sub.isEmpty()) "(none)" else sub} lang=$lang -> ${dest.name}")
+        fontDao.all()
     }
 
-    private fun collectFontFiles(doc: DocumentFile, out: MutableList<DocumentFile>) {
-        if (!doc.isDirectory) { out.add(doc); return }
-        doc.listFiles().forEach { child ->
-            when {
-                child.isDirectory -> collectFontFiles(child, out)
-                child.isFile -> out.add(child)
-            }
-        }
+    /** 删除一个已导入字体：清 DB 行 + 删私有文件副本。 */
+    suspend fun delete(face: FontFace) = withContext(Dispatchers.IO) {
+        runCatching { face.path?.let { File(it).delete() } }
+        fontDao.delete(face.id)
+        FileLogger.i(tag, "deleted font id=${face.id} family=${face.familyName}")
     }
 
     private companion object {

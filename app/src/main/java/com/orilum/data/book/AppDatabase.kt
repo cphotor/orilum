@@ -16,10 +16,11 @@ import com.orilum.data.font.FontFace
  * v3：reading_states 增加 locator 列，用于「重开接着上次位置」的精确定位恢复。
  * v4：新增 font_faces 表（系统 + 导入字体池），family_name 唯一。
  * v5：font_faces 增加 subfamily 列（字重/样式），家族内多字重文件归并候选时优先 Regular。
+ * v6：唯一索引并入 subfamily——同家族多字重文件并存，渲染时按字重归档。
  */
 @Database(
     entities = [Book::class, BookReadingState::class, FontFace::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -71,6 +72,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6：唯一索引从 `(familyName, source)` 换为 `(familyName, subfamily, source)`，
+         * 让同家族多字重文件并存（渲染按字重归档）。同时把 v5 遗留的可空 `subfamily`
+         * 重建为 `NOT NULL DEFAULT ''`（实体字段非空），保证 Room schema 校验一致。
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 旧唯一索引依版本命过 `index_font_faces_familyName` 与
+                // `index_font_faces_familyName_source` 两种名字，全部剔除。
+                db.execSQL("DROP INDEX IF EXISTS `index_font_faces_familyName`")
+                db.execSQL("DROP INDEX IF EXISTS `index_font_faces_familyName_source`")
+                // 重建使 subfamily NOT NULL（空串 = 无字重名兜底），并顺带重建复合唯一索引。
+                db.execSQL("ALTER TABLE `font_faces` RENAME TO `font_faces_old`")
+                db.execSQL(
+                    "CREATE TABLE `font_faces` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`familyName` TEXT NOT NULL, " +
+                        "`displayName` TEXT NOT NULL, " +
+                        "`subfamily` TEXT NOT NULL DEFAULT '', " +
+                        "`source` TEXT NOT NULL, " +
+                        "`path` TEXT, " +
+                        "`lang` TEXT NOT NULL)",
+                )
+                db.execSQL(
+                    "INSERT INTO `font_faces` (`id`, `familyName`, `displayName`, `subfamily`, `source`, `path`, `lang`) " +
+                        "SELECT `id`, `familyName`, `displayName`, IFNULL(`subfamily`, ''), `source`, `path`, `lang` " +
+                        "FROM `font_faces_old`",
+                )
+                db.execSQL("DROP TABLE `font_faces_old`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_font_faces_familyName_subfamily_source` " +
+                        "ON `font_faces` (`familyName`, `subfamily`, `source`)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -80,7 +117,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
             }
     }
 }

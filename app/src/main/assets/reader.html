@@ -1045,16 +1045,49 @@ const pxToFontScale = p => {
   const ratio = Math.min(2.0, Math.max(0.5, Number(p) / BASE_BODY_PX))
   return ratio <= 1 ? (ratio - 0.5) / 0.01 : ratio / 0.02
 }
-// 字体池：从 Kotlin 拉取设备真实可用的字体（系统扫描 + 用户导入）。
-// 每项 {key(源文件标识，供 /fonts/{key} 加载), name(文件名去扩展名), lang(cjk|latin|generic)}；
-// 选择值用内部别名 alias 记入 settings（'' = 跟随原书），CSS 里经 @font-face url(/fonts/{key}) 实际加载源文件。
-let fontFaces = []
-const aliasOf = f => `folilib_${f.key}`
-let faceByAlias = new Map()
+// 字体池：从 Kotlin 拉取用户导入的字体池，以「家族结构」组织。
+// 每个家族 {family(内嵌族名), name(默认显示名), lang(cjk|latin|generic), weights[{id, subfamily}]}；
+// 同一家族的多字重文件归并为一个条目，渲染时按字重归档成多份 @font-face，浏览器按字重自动挑文件。
+// 选择值用家族别名 alias 记入 settings（'' = 跟随原书），CSS 里经 spriteFontFace 为家族内每个字重注入 @font-face。
+let fontFamilies = []
+const familyAlias = fam => `folifam_${fam.family}`
+let familyByAlias = new Map()
 // 各字体分类页的重绘闭包（key -> fn），导入完成后重排网格
 const fontGridHosts = new Map()
 let FONT_CHOICES = [{ value: '', label: '跟随原书', face: null }]
-const fontLabel = v => { if (!v) return '跟随原书'; const f = faceByAlias.get(v); return f ? f.name : v }
+
+/** 字重名 → CSS font-weight 数值；无法识别返回 null（不写描述符，让家族内默认文件兜底）。 */
+const subfamilyWeight = s => {
+  const t = (s || '').toLowerCase()
+  if (/thin|hairline/.test(t)) return 100
+  if (/extra\s?light|ultra\s?light/.test(t)) return 200
+  if (/light/.test(t)) return 300
+  if (/medium|demi\s?bold/.test(t)) return 500
+  if (/semi\s?bold/.test(t)) return 600
+  if (/extra\s?bold|ultra\s?bold/.test(t)) return 800
+  if (/black|heavy/.test(t)) return 900
+  if (/bold/.test(t)) return 700
+  return null
+}
+/** 字重名 → italic/oblique；普通(Regular 等)返回 ''（不写 font-style）。 */
+const subfamilyStyle = s => {
+  const t = (s || '').toLowerCase()
+  if (/italic/.test(t)) return 'italic'
+  if (/oblique/.test(t)) return 'oblique'
+  return ''
+}
+/** 为一个家族别名生成多份 @font-face（同家族名 + 各自 font-weight/style 描述符），使浏览器按字重归档匹配。 */
+const spriteFontFace = (alias, fam) => {
+  if (!fam) return []
+  return (fam.weights || []).map(w => {
+    const wv = subfamilyWeight(w.subfamily)
+    const sv = subfamilyStyle(w.subfamily)
+    const desc = (wv != null ? `font-weight: ${wv}; ` : '') + (sv ? `font-style: ${sv}; ` : '')
+    return `@font-face { font-family: '${alias}'; src: url('/fonts/${w.id}'); ${desc}}`
+  })
+}
+
+const fontLabel = v => { if (!v) return '跟随原书'; const f = familyByAlias.get(v); return f ? f.name : v }
 // 字体五分类的 key -> 显示名（尽量与 top/二级页入口一致）
 const FONT_KEYS = [['fontBody', '正文'], ['fontTitle', '标题'], ['fontCode', '代码'], ['fontBold', '粗体'], ['fontItalic', '斜体']]
 
@@ -1063,11 +1096,11 @@ const FONT_KEYS = [['fontBody', '正文'], ['fontTitle', '标题'], ['fontCode',
 const reloadFonts = () => {
   let list = []
   try { const raw = bridgeGet('listFonts'); if (raw) list = JSON.parse(raw) } catch (e) { list = [] }
-  fontFaces = list
-  faceByAlias = new Map(fontFaces.map(f => [aliasOf(f), f]))
+  fontFamilies = list
+  familyByAlias = new Map(fontFamilies.map(f => [familyAlias(f), f]))
   FONT_CHOICES = [
     { value: '', label: '跟随原书', face: null },
-    ...fontFaces.map(f => ({ value: aliasOf(f), label: f.name, face: f })),
+    ...fontFamilies.map(f => ({ value: familyAlias(f), label: f.name, face: f })),
   ]
   fontGridHosts.forEach((render) => render())
 }
@@ -1217,12 +1250,11 @@ const buildReadingCSS = (noParaOverride = false) => {
   ]
   const mains = new Set()
   cats.forEach(([, main]) => { if (main) mains.add(main) })
-  mains.forEach(alias => {
-    const f = faceByAlias.get(alias)
-    if (f) css.push(`@font-face { font-family: '${alias}'; src: url('/fonts/${encodeURIComponent(f.key)}'); font-style: normal; }`)
-  })
+  // 每个被命中家族注入多份 @font-face（同家族名 + 各自 font-weight/style 描述符），
+  // 让浏览器在家族内部按字重/样式自动挑文件，无需为每个字重单独配置。
+  mains.forEach(alias => { spriteFontFace(alias, familyByAlias.get(alias)).forEach(f => css.push(f)) })
   cats.forEach(([, main, sel, fb]) => {
-    if (main) css.push(`${sel} { font-family: '${main}', ${fb}; }`)
+    if (main && familyByAlias.has(main)) css.push(`${sel} { font-family: '${main}', ${fb}; }`)
   })
   return css.join('\n')
 }
@@ -1949,10 +1981,6 @@ const fontFacePage = settingsPage('字体', el => {
       onTap: () => pushSettingsPage(fontPickerPage(key, label), label),
     }))
   })
-  // 指定目录导入：选择字体目录（直接引用，不拷贝），确认后桥回调刷新字体列表（删源文件即消失）
-  el.append(settingsRow('指定目录导入…', {
-    onTap: () => { if (EPUBBridge && EPUBBridge.pickFontDirectory) EPUBBridge.pickFontDirectory() },
-  }))
 })
 
 // 导入字体完成后由 Kotlin 回调：重载字体池并刷新取值标签（含已打开的选择网格）
@@ -1978,11 +2006,8 @@ const fontPickerPage = (key, title) => {
     // 预收集所有行需要的预览 @font-face（CSS 里已同名 alias 的不重复注入）
     const styleEl = ensureFontPreviewStyle()
     const previewAliases = new Set()
-    FONT_CHOICES.forEach(c => { if (c.face) previewAliases.add(aliasOf(c.face)) })
-    const extra = [...previewAliases].map(a => {
-      const f = faceByAlias.get(a)
-      return `@font-face { font-family: '${a}'; src: url('/fonts/${encodeURIComponent(f.key)}'); }`
-    }).join('\n')
+    FONT_CHOICES.forEach(c => { if (c.face) previewAliases.add(familyAlias(c.face)) })
+    const extra = [...previewAliases].map(a => spriteFontFace(a, familyByAlias.get(a)).join('\n')).join('\n')
     if (extra !== styleEl.dataset.prev) { styleEl.dataset.prev = extra; styleEl.textContent = extra }
 
     const scrim = document.createElement('div')
@@ -2000,8 +2025,8 @@ const fontPickerPage = (key, title) => {
       items.forEach(c => {
         const row = document.createElement('div')
         row.className = 'font-row' + (settings[field] === c.value ? ' sel' : '')
-        // 行内预览：用所选字体自身渲染名称
-        const fam = c.face ? `'${aliasOf(c.face)}', serif` : 'inherit'
+        // 行内预览：用所选字体自身字形渲染名称
+        const fam = c.face ? `'${familyAlias(c.face)}', serif` : 'inherit'
         row.innerHTML = `<span class="font-sample" style="font-family:${fam}">${c.label}</span>` +
           `<span class="font-check">${settings[field] === c.value ? '✓' : ''}</span>`
         row.addEventListener('click', () => {

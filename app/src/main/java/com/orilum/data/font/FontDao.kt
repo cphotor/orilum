@@ -15,7 +15,15 @@ interface FontDao {
     @Query("SELECT * FROM font_faces WHERE id = :id")
     suspend fun byId(id: Long): FontFace?
 
-    /** 导入以 familyName 为准去重（同款重导做覆盖），并带唯一索引兜底。 */
+    /** 按 id 取单个（阻塞式，供 WebView 同步字体加载线程直调）。 */
+    @Query("SELECT * FROM font_faces WHERE id = :id")
+    fun byIdBlocking(id: Long): FontFace?
+
+    /** 导入以 (familyName, subfamily) 为准去重（同款同字重重导覆盖），并带唯一索引兜底。 */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(fonts: List<FontFace>)
+
+    /** 删除单个已导入字体（用户主动删除）。阻塞式，供同步字体加载线程直调。 */
+    @Query("DELETE FROM font_faces WHERE id = :id")
+    fun delete(id: Long)
 }
