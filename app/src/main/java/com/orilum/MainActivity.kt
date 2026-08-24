@@ -97,6 +97,7 @@ import com.orilum.ui.reader.ReaderActivity
 import com.orilum.ui.theme.OrilumTheme
 import com.orilum.util.FileLogger
 import kotlinx.coroutines.launch
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import java.io.File
 
@@ -645,15 +646,19 @@ private fun ManageFontsPage(
  */
 @androidx.compose.runtime.Composable
 private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
-    // 删除钮宽度 y：既是行内元素宽，也是滑动位移上限。
+    // 删除钮宽度 y：既是行内元素宽，也是左滑位移上限。
     val yDp = 88.dp
     val yPx = with(LocalDensity.current) { yDp.toPx() }
+    // 向右（正向）橡皮筋弹性上限：正常值域 [-yPx, 0]，右拉最多到 maxRightPx 后受饱和阻力停住。
+    val rightPx = with(LocalDensity.current) { 72.dp.toPx() }
     val scope = rememberCoroutineScope()
-    // 整体横向偏移（px，负=向左），范围 [-yPx, 0]；0 关闭，-yPx 删除钮贴右缘完全露出。
+    // 整体横向偏移（px，负=向左），正常范围 [-yPx, 0]；0 关闭，-yPx 删除钮贴右缘完全露出。
+    // 拖动时可短暂超过 0 向右（橡皮筋），松手弹回 0。
     val offsetX = remember { Animatable(0f) }
-    // 本次拖动「停止前滑动方向」（1=右滑，-1=左滑，0=未动）：每帧按 dragAmount 符号更新，
-    // 无阈值，慢速/少量滑动也能被记录；松手一律按它惯性滑到底，不回弹。
+    // 本次拖动「停止前滑动方向」（1=右滑，-1=左滑，0=未动）：每帧按 dragAmount 符号更新，无阈值。
     val dragDir = remember { mutableFloatStateOf(0f) }
+    // 本次拖动累计手指位移（负=左，正=右）：左滑 1:1 跟手，右滑经饱和函数产生「越远阻力越大」的橡皮筋手感。
+    val dragAccum = remember { mutableFloatStateOf(0f) }
     // 外层按行内容定高，出界部分用 clipToBounds 裁剪隐藏（删除钮平时在面板右缘外即被裁掉）。
     Box(
         modifier = Modifier
@@ -666,25 +671,37 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .pointerInput(yPx) {
+                .pointerInput(yPx, rightPx) {
                     detectDragGestures(
-                        onDragStart = { dragDir.value = 0f },
+                        onDragStart = {
+                            dragDir.value = 0f
+                            dragAccum.value = offsetX.value // 从当前偏移继续累计手指位移
+                        },
                         onDragEnd = {
                             scope.launch {
-                                // 仅按「停止前滑动方向」判定（无阈值、不看最终位移、不用速度）：
-                                // 左滑→惯性滑到展开极限(-yPx)；右滑或未动→滑回关闭(0)。
-                                // spring 到位不 overshoot，少量/慢速滑动也顺滑跟手，不回弹。
-                                val target = if (dragDir.value < 0f) -yPx else 0f
+                                // 左滑/已展开→按停止前方向决定展开或关闭；右拉橡皮筋态（offset>0）→ 弹回 0。
+                                val target = if (offsetX.value <= 0f) {
+                                    if (dragDir.value < 0f) -yPx else 0f
+                                } else {
+                                    0f
+                                }
                                 offsetX.animateTo(target, spring())
                             }
                         },
                     ) { change, dragAmount ->
                         change.consume()
-                        // 记录最近一帧的滑动方向（符号即可，不过滤；touch slop 已确保有真实位移）。
+                        // 记录最近一帧的滑动方向（符号即可）；touch slop 已确保有真实位移。
                         if (dragAmount.x != 0f) {
                             dragDir.value = if (dragAmount.x > 0f) 1f else -1f
                         }
-                        scope.launch { offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-yPx, 0f)) }
+                        dragAccum.value += dragAmount.x
+                        // 显示位移：左滑在 [-yPx, 0] 内 1:1 跟手；右滑按饱和函数压缩到 (0, rightPx]，越远越难拉。
+                        val shown = if (dragAccum.value <= 0f) {
+                            dragAccum.value.coerceIn(-yPx, 0f)
+                        } else {
+                            rightPx * (1f - exp(-dragAccum.value / rightPx))
+                        }
+                        scope.launch { offsetX.snapTo(shown) }
                     }
                 }
                 .padding(start = 16.dp)
