@@ -23,26 +23,36 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -54,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -105,11 +117,11 @@ class MainActivity : ComponentActivity() {
         // 会把系统栏 insets 计入对应栏的背景），切换应用/最近任务预览时不再露出独立深色横条，
         // 与阅读页沉浸式「系统栏与内容同色」是同一套思路。
         enableEdgeToEdge()
-        // 书架顶栏/底栏为深灰 #303030，系统状态栏/导航栏图标必须用浅色，否则深底深字看不清。
-        // enableEdgeToEdge 默认按浅色主题给浅色图标，这里在 onCreate 用 decorView 强制改为浅色。
+        // 书架顶栏/底栏改为白底黑字，系统状态栏/导航栏图标需用深色，否则白底白字看不清。
+        // enableEdgeToEdge 默认按浅色主题给深色图标，这里在 onCreate 用 decorView 强制改为深色。
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            isAppearanceLightNavigationBars = false
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
         }
 
         setContent {
@@ -195,39 +207,45 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 书架顶栏与底栏配色，与阅读页工具栏一致（深灰底 + 浅灰前景）。 */
-private val BarGray = Color(0xFF303030)
-private val BarGrayFg = Color(0xFFF5F5F5)
+/** 书架顶栏与底栏配色：普通白底 + 深黑前景（比阅读页工具栏的深灰更轻，契合书架清爽观感）。 */
+private val BarGray = Color.White
+private val BarGrayFg = Color(0xFF1F1F1F)
 
 /**
- * 底部工具栏按钮：图标在上、文字在下，占满平分一行；整项可点（含文字），按压时整块变白高亮。
+ * 底部工具栏按钮：图标在上、文字在下，平分一行；「图标+文字」整体作为圆角按钮，按压时整块高亮。
  * 与阅读页 reader.html 的 .tool（icon 上、label 下、:active 高亮）视觉与交互一致。
  * 复用 MutableInteractionSource 监听按压态驱动背景，而非 Material ripple 胶囊，保持两界面同一套观感。
  */
 @androidx.compose.runtime.Composable
-private fun RowScope.ToolItem(icon: String, label: String, onClick: () -> Unit) {
+private fun RowScope.ToolItem(icon: ImageVector, label: String, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    // 外层占 1/4 平分整行并承接点击：保证「图标+文字整项都可点」。
+    // 外层占 1/4 平分一行并垂直居中，负责布局但不接管按压，保证整项仍是平分条。
     Column(
         modifier = Modifier
             .weight(1f)
-            .fillMaxHeight()
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .fillMaxHeight(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        // 按钮本体：紧凑圆角块，四周留白；按压高亮只出现在此块内（与阅读页 .tool 的圆角 :active 一致），不铺满整项。
+        // 按钮本体：圆角块，内衬合理留白包裹「图标+文字」；按压高亮覆盖整个块（对齐阅读页 .tool 的 :active）。
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .background(if (pressed) Color(0x1FFFFFFF) else Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .background(if (pressed) Color(0x12000000) else Color.Transparent)
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(text = icon, fontSize = 18.sp, color = BarGrayFg)
-                Text(text = label, fontSize = 10.sp, color = BarGrayFg)
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = BarGrayFg,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(text = label, fontSize = 12.sp, color = BarGrayFg, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -272,32 +290,45 @@ private fun ShelfScreen(
     settingsOpen: Boolean,
     onDismissSettings: () -> Unit,
 ) {
-    // 系统栏图标浅色已在 MainActivity.onCreate 统一设置（见 enableEdgeToEdge 后），此处无需重复。
+    // 系统栏图标深色已在 MainActivity.onCreate 统一设置（见 enableEdgeToEdge 后），此处无需重复。
 
     Scaffold(
+        containerColor = Color.White,
         topBar = {
-            // 标题栏深灰 #303030，与阅读页工具栏同色；状态栏区域由 Material3 自动并入同色。
-            TopAppBar(
-                title = { Text(text = "书架") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = BarGray,
-                    titleContentColor = BarGrayFg,
-                ),
-            )
+            // 标题栏：白色、高度 48dp（较此前 32dp 增加 50%），「书架」靠左垂直居中、字号 19sp。
+            // 状态栏区域单独以同色白条承接，与标题栏融合；系统栏图标为深色（见 onCreate 设置）。
+            Column(modifier = Modifier.fillMaxWidth().background(BarGray)) {
+                Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars).background(BarGray))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start,
+                ) {
+                    Text(
+                        text = "书架",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = BarGrayFg,
+                    )
+                }
+            }
         },
         bottomBar = {
-            // 底部工具栏：与阅读页 #bar-bottom 同语义——深灰背景铺满到屏幕底（含系统手势条区域），
-            // 按钮行固定 56dp 置于其上，底部用「系统导航条安全区」高度撑开，按钮不与上滑提示条相碰。
+            // 底部工具栏：白色背景铺满到屏幕底（含系统栏区域），按钮行高 56dp 置于其上。
             Column(modifier = Modifier.fillMaxWidth().background(BarGray)) {
+                // 按钮行高 56dp 足够容纳「图标+文字」整块并垂直居中；行内上下留白保持紧凑，避免按钮下方出现过多空白。
                 Row(modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    ToolItem(icon = if (gridMode) "▦" else "☰", label = "封面/列表", onClick = onToggleView)
-                    ToolItem(icon = "＋", label = "导入", onClick = onImport)
-                    ToolItem(icon = "✎", label = "编辑", onClick = onEdit)
-                    ToolItem(icon = "⚙", label = "设置", onClick = onSettings)
+                    ToolItem(icon = if (gridMode) Icons.Default.List else ImageVector.vectorResource(R.drawable.ic_grid), label = "封面/列表", onClick = onToggleView)
+                    ToolItem(icon = Icons.Default.Add, label = "导入", onClick = onImport)
+                    ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = onEdit)
+                    ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
                 }
-                // 底部安全间距：该设备为手势导航，WindowInsets.navigationBars 常返回 0/极小，无法靠动态值撑开；
-                // 用固定安全高度让按钮行与系统上滑手势条保持清晰间距（观感对齐阅读页底栏）。
-                Spacer(modifier = Modifier.height(10.dp))
+                // 底部安全间距：该设备系统导航栏 inset 极小，取一半即可让按钮行避开系统栏，且几乎不留空白。
+                val navBottom = WindowInsets.navigationBars.getBottom(LocalDensity.current)
+                Spacer(modifier = Modifier.height((navBottom / 2).dp))
             }
         },
     ) { padding ->
@@ -357,7 +388,7 @@ private sealed interface SettingsRoute {
 }
 
 /** 抽屉面板配色，取自阅读页 reader.html 浅色主题 `--ui-bg` 族，保证两侧观感一致。 */
-private val PanelBg = Color(0xFFFAF8F4)
+private val PanelBg = Color.White
 private val PanelText = Color(0xFF2B2B2B)
 private val PanelMuted = Color(0xFF888888)
 private val PanelChevron = Color(0xFFBBBBBB)
