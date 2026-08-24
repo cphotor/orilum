@@ -610,6 +610,11 @@ class EPUBBridge(
 
     @JavascriptInterface
     fun log(msg: String) = FileLogger.d("Orilum.js", msg)
+
+    /** 一次性分页诊断：JS 在末页聚合整条 JSON，只调用一次，Kotlin 用 Log.i 直出 Logcat(标签 DIAG_PAGINATOR)。
+     *  单次输出规避 OriginOS 每秒 250 条速率限流丢日志；不要循环调用。 */
+    @JavascriptInterface
+    fun diagnosticPaginationInfo(json: String) = Log.i("DIAG_PAGINATOR", json)
 }
 
 /** 由书架启动阅读器时传入的书文件绝对路径。 */

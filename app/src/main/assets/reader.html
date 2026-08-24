@@ -2198,6 +2198,9 @@ addEventListener('touchstart', e => {
   const isBright = resolveBrightGesture(e.touches)
   if (!isBright && e.touches.length !== 1) return
   const t = e.touches[0]
+  // 手势诊断：记录手指起点时容器可滚宽（viewSize 作 scrollWidth 代理），供 snap 对比滑动前后是否发生 columns 重排跳变
+  const r0 = view?.renderer
+  window.__gesture = { type: 'touchstart', sw0: r0?.viewSize ?? -1, sw1: -1, t: performance.now() }
   touch = {
     startX: t.clientX, startY: t.clientY,
     time: e.timeStamp, dx: 0, lastX: t.clientX, lastY: t.clientY, vx: 0, vy: 0, active: true,
@@ -2253,6 +2256,8 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
+  const r1 = view?.renderer
+  if (window.__gesture) { window.__gesture.type = 'touchend'; window.__gesture.sw1 = r1?.viewSize ?? -1 }
   // 亮度手势已激活且确实调节了亮度：仅保存亮度，不做翻页/吸附。
   // 注意：边缘区域被判为亮度手势、但实际是水平滑动时（未触发亮度，lastBright 仍为 null），
   // 绝不能提前 return，否则缺少 snap/next/prev，小幅滑会卡在“两页之间”无法吸附。
@@ -2272,6 +2277,8 @@ addEventListener('touchend', e => {
 
 addEventListener('touchcancel', () => {
   touch.active = false
+  const r1 = view?.renderer
+  if (window.__gesture) { window.__gesture.type = 'touchcancel'; window.__gesture.sw1 = r1?.viewSize ?? -1 }
 }, { passive: true })
 
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
