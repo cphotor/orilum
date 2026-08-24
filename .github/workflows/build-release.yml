@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apk-release
-          path: app/build/outputs/apk/release/app-release.apk
+          path: app/build/outputs/apk/release/orilum-*.apk
           if-no-files-found: error
 
       # 仅打 tag 时把签名 APK 挂到对应 GitHub Release。
@@ -59,4 +59,4 @@ jobs:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           body: 自动构建的签名 APK（由 GitHub Actions 云端编译、tested/签名后发布）。
-          files: app/build/outputs/apk/release/app-release.apk
+          files: app/build/outputs/apk/release/orilum-*.apk

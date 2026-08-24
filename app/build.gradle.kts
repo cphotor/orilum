@@ -1,3 +1,6 @@
+import org.gradle.api.Action
+import com.android.build.gradle.api.ApplicationVariant
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.net.URI
 import java.util.zip.CRC32
@@ -21,7 +24,7 @@ android {
         minSdk = 23
         targetSdk = 35
         versionCode = 3
-        versionName = "0.2.1"
+        versionName = "0.2.7"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -74,6 +77,18 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // Release 变体产物统一命名为 orilum-<version>.apk，供本地构建、CI artifact、Release 附件三处一致使用。
+    applicationVariants.all(object : Action<ApplicationVariant> {
+        override fun execute(v: ApplicationVariant) {
+            if (v.buildType.name != "release") return
+            // all(Action) 触发时变体已配置、outputs 已实现化，可直接遍历改写产物名。
+            v.outputs.forEach { output ->
+                // outputFileName 在 Kotlin DSL 中是底层实现类的 setter，经 BaseVariantOutputImpl 改写。
+                (output as BaseVariantOutputImpl).outputFileName = "orilum-${v.versionName}.apk"
+            }
+        }
+    })
 }
 
 kotlin {

@@ -18,7 +18,16 @@
 
 ---
 
-## 近期更新 · 三章缓存翻页与首屏定位修复
+## 近期更新 · 沉浸式迁移到 WindowInsets
+
+> 把已 deprecated 的 `SYSTEM_UI_FLAG_*` 系统栏显隐迁移为 `WindowInsetsControllerCompat`（minSdk 23 兼容），消除 targetSdk 35 上的弃用告警，规避未来 Android 版本收紧。
+
+- **四类系统栏操作统一封装**：`enterImmersive()`（隐藏状态栏+导航栏）、`showStatusBarOnly()`（工具栏弹出，仅显示状态栏）、`exitImmersive()`（临时退出全屏，如 SAF 目录选择）。
+- **边到边**：onCreate 改用 `WindowCompat.setDecorFitsSystemWindows(window, false)`，内容全屏铺满、系统栏透明叠加。
+- **保留项**：`statusBarColor`/`navigationBarColor` 的深灰融合逻辑暂留（实现工具栏与状态栏同色一体；Android 15 强制边到边下会被忽略，旧版本仍生效）。
+- **真机验证**：vivo Pad Air（v 栈 API 15）批量回归通过——沉浸式默认、工具栏显隐联动、最近任务预览无杂色条、SAF 目录选择正常。
+
+---
 
 > 针对水平分页的多 View 拼接引擎做了一次系统性修正，解决「章间来回翻出现空白页」与「打开书首屏左边距偏小」两类问题。
 

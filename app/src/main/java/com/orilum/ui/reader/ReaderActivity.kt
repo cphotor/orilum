@@ -19,6 +19,9 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewAssetLoader
 import com.orilum.data.book.AppDatabase
@@ -218,14 +221,10 @@ class ReaderActivity : ComponentActivity() {
         Log.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         FileLogger.w(TAG, "★ ReaderActivity onCreate bookPath=$bookPath bookId=$bookId savedLocator=${savedLocator != null}")
         // 沉浸阅读：默认隐藏状态栏与导航栏；工具栏弹出时经 JS 联动显示状态栏（见 EPUBBridge.setSystemBarsVisible）
-        // 使用 LAYOUT_FULLSCREEN|LAYOUT_STABLE 实现边到边绘制：内容始终全屏铺满，状态栏/导航栏透明叠加其上，
+        // 使用 WindowInsets 边到边绘制：内容始终全屏铺满，状态栏/导航栏透明叠加其上，
         // 这样「切换应用/最近任务预览」里系统临时退出沉浸式时，顶部就是阅读页本身，不会露出独立的深色/白色条。
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        enterImmersive()
         // 系统栏配色跟随工具栏显隐动态设置（见 setSystemBarsVisible）：默认透明 + 浅色窗底，
         // 避免在「切换应用/最近任务预览」时系统强制退出沉浸式、把固定 #303030 状态栏渲染成顶部深色横条
         //（其他应用无此问题，因为它们状态栏与内容同色）。仅在工具栏弹出时置为 #303030 与标题栏融为一色。
@@ -325,21 +324,16 @@ class ReaderActivity : ComponentActivity() {
                             if (show) {
                                 // 取消待执行的「置透明」，避免隐藏中被打断
                                 hideBarTransparentRunnable?.let { decor.removeCallbacks(it) }
-                                // 工具栏弹出：状态栏同色深灰、与标题栏融为一体
+                                // 工具栏弹出：状态栏同色深灰、与标题栏融为一体（仅显示状态栏，导航栏保持隐藏）
                                 window.statusBarColor = 0xFF303030.toInt()
                                 window.navigationBarColor = 0xFF303030.toInt()
-                                @Suppress("DEPRECATION")
-                                decor.systemUiVisibility =
-                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                showStatusBarOnly()
                             } else {
                                 // 收起：先保持深灰回缩，让系统状态栏回缩动画全程是深灰，不瞬间露出阅读底色；
                                 // 待状态栏彻底隐藏后再延迟置透明（透明仅用于隐藏态，避免最近任务预览出深色条）。
                                 window.statusBarColor = 0xFF303030.toInt()
                                 window.navigationBarColor = 0xFF303030.toInt()
-                                @Suppress("DEPRECATION")
-                                decor.systemUiVisibility =
-                                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                enterImmersive()
                                 val r = Runnable {
                                     runOnUiThread {
                                         runCatching {
@@ -385,6 +379,28 @@ class ReaderActivity : ComponentActivity() {
         } ?: 0
     }
 
+    /** 沉浸阅读：隐藏状态栏与导航栏。由 deprecated 的 `SYSTEM_UI_FLAG_*` 迁移为
+     *  兼容的 [WindowInsetsControllerCompat]（minSdk 23 也可用）；底层走边到边
+     *  （[WindowCompat.setDecorFitsSystemWindows] 已置 false），边缘擦划可临时唤出系统栏。 */
+    private fun enterImmersive() {
+        val c = WindowInsetsControllerCompat(window, window.decorView)
+        c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        c.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    /** 工具栏弹出：仅显示状态栏，导航栏保持隐藏（符合「状态栏随工具栏显隐」的既有交互）。 */
+    private fun showStatusBarOnly() {
+        val c = WindowInsetsControllerCompat(window, window.decorView)
+        c.show(WindowInsetsCompat.Type.statusBars())
+        c.hide(WindowInsetsCompat.Type.navigationBars())
+    }
+
+    /** 完全退出沉浸式：恢复状态栏与导航栏（用于临时退出全屏，如 SAF 目录选择）。 */
+    private fun exitImmersive() {
+        WindowInsetsControllerCompat(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+    }
+
     /** 临时退出沉浸式再启动字体目录选择：vivo 目录选择器(SAF)在全屏宿主下会错误计算
      *  insets，把「选择此文件夹」确认按钮压到手势区外导致无法确认；退出全屏规避。 */
     private fun exitImmersiveAndPickFontDir() {
@@ -393,16 +409,11 @@ class ReaderActivity : ComponentActivity() {
     }
 
     private fun leaveImmersive() {
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        exitImmersive()
     }
 
     private fun reapplyImmersive() {
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        enterImmersive()
     }
 
     // ---- 系统级亮度（写 Settings.System.SCREEN_BRIGHTNESS，真正控制物理背光，可调亮）----
