@@ -646,18 +646,20 @@ private fun ManageFontsPage(
  */
 @androidx.compose.runtime.Composable
 private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
-    // 删除钮宽度 y：既是行内元素宽，也是左滑位移上限。
+    // 删除钮宽度 y：既是行内元素宽，也是左滑-右缘贴边的位移量。
     val yDp = 88.dp
     val yPx = with(LocalDensity.current) { yDp.toPx() }
-    // 向右（正向）橡皮筋弹性上限：正常值域 [-yPx, 0]，右拉最多到 maxRightPx 后受饱和阻力停住。
+    // 向右（正向）橡皮筋上限：正常右拉到 0 后，最多额外拉到 rightPx，越远阻力越大，松手回 0。
     val rightPx = with(LocalDensity.current) { 72.dp.toPx() }
+    // 向左（负向）橡皮筋上限：正常左滑到 -yPx（红色右缘贴屏）后，还可继续向左越出 leftPx，松手回 -yPx。
+    val leftPx = with(LocalDensity.current) { 56.dp.toPx() }
     val scope = rememberCoroutineScope()
-    // 整体横向偏移（px，负=向左），正常范围 [-yPx, 0]；0 关闭，-yPx 删除钮贴右缘完全露出。
-    // 拖动时可短暂超过 0 向右（橡皮筋），松手弹回 0。
+    // 整体横向偏移（px，负=向左）。常态值域 [-yPx, 0]：0 关闭，-yPx 删除钮右缘贴屏。
+    // 拖动可短暂越界：向右最多到 rightPx、向左越过 -yPx 最多到 -yPx-leftPx，均带橡皮筋，松手分别回 0 / -yPx。
     val offsetX = remember { Animatable(0f) }
     // 本次拖动「停止前滑动方向」（1=右滑，-1=左滑，0=未动）：每帧按 dragAmount 符号更新，无阈值。
     val dragDir = remember { mutableFloatStateOf(0f) }
-    // 本次拖动累计手指位移（负=左，正=右）：左滑 1:1 跟手，右滑经饱和函数产生「越远阻力越大」的橡皮筋手感。
+    // 本次拖动累计手指位移（负=左，正=右）：常态域 1:1 跟手，越界域经饱和函数压缩产生「越远阻力越大」的橡皮筋。
     val dragAccum = remember { mutableFloatStateOf(0f) }
     // 外层按行内容定高，出界部分用 clipToBounds 裁剪隐藏（删除钮平时在面板右缘外即被裁掉）。
     Box(
@@ -671,7 +673,7 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .pointerInput(yPx, rightPx) {
+                .pointerInput(yPx, rightPx, leftPx) {
                     detectDragGestures(
                         onDragStart = {
                             dragDir.value = 0f
@@ -679,8 +681,9 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                         },
                         onDragEnd = {
                             scope.launch {
-                                // 左滑/已展开→按停止前方向决定展开或关闭；右拉橡皮筋态（offset>0）→ 弹回 0。
-                                val target = if (offsetX.value <= 0f) {
+                                // 左滑到删除区 → 吸附到删除态(-yPx)；右滑/未左移 → 回 0；
+                                // 正橡皮筋或左越界橡皮筋 → 分别回 0 / -yPx。
+                                val target = if (offsetX.value < 0f) {
                                     if (dragDir.value < 0f) -yPx else 0f
                                 } else {
                                     0f
@@ -695,11 +698,17 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                             dragDir.value = if (dragAmount.x > 0f) 1f else -1f
                         }
                         dragAccum.value += dragAmount.x
-                        // 显示位移：左滑在 [-yPx, 0] 内 1:1 跟手；右滑按饱和函数压缩到 (0, rightPx]，越远越难拉。
-                        val shown = if (dragAccum.value <= 0f) {
-                            dragAccum.value.coerceIn(-yPx, 0f)
-                        } else {
-                            rightPx * (1f - exp(-dragAccum.value / rightPx))
+                        // 显示位移三域：
+                        //  - [-yPx, 0] 内 1:1 跟手；pred -yPx 之后越界左拉，用饱和压缩到 (-yPx-leftPx, -yPx)；
+                        //  - >0 右拉，饱和压缩到 (0, rightPx)。
+                        val d = dragAccum.value
+                        val shown = when {
+                            d < -yPx -> {
+                                val over = -d - yPx
+                                -yPx - leftPx * (1f - exp(-over / leftPx))
+                            }
+                            d <= 0f -> d
+                            else -> rightPx * (1f - exp(-d / rightPx))
                         }
                         scope.launch { offsetX.snapTo(shown) }
                     }
