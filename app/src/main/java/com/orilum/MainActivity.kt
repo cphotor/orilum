@@ -651,12 +651,14 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
     val yPx = with(LocalDensity.current) { yDp.toPx() }
     // 向右（正向）橡皮筋上限：正常右拉到 0 后，最多额外拉到 rightPx，越远阻力越大，松手回 0。
     val rightPx = with(LocalDensity.current) { 72.dp.toPx() }
-    // 向左（负向）橡皮筋上限：正常左滑到 -yPx（红色右缘贴屏）后，还可继续向左越出 leftPx，松手回 -yPx。
+    // 向左（负向）越界上限：红块右缘贴屏后，字体+红块主体随手指继续左移，红块右半被拉长（右空增大）最多 leftPx，松手回弹。
     val leftPx = with(LocalDensity.current) { 56.dp.toPx() }
     val scope = rememberCoroutineScope()
     // 整体横向偏移（px，负=向左）。常态值域 [-yPx, 0]：0 关闭，-yPx 删除钮右缘贴屏。
-    // 拖动可短暂越界：向右最多到 rightPx、向左越过 -yPx 最多到 -yPx-leftPx，均带橡皮筋，松手分别回 0 / -yPx。
+    // 拖动可短暂越界：向右最多到 rightPx（饱和压缩）；向左越过 -yPx 后联动 overBest，主体继续左移且右空被拉长。
     val offsetX = remember { Animatable(0f) }
+    // 越界左拉的饱和量（px）：红块自身右移补偿 offsetX 之外、再加宽自身，使红块右缘保持贴屏、右空被拉长 overBest。松手回 0。
+    val overBest = remember { Animatable(0f) }
     // 本次拖动「停止前滑动方向」（1=右滑，-1=左滑，0=未动）：每帧按 dragAmount 符号更新，无阈值。
     val dragDir = remember { mutableFloatStateOf(0f) }
     // 本次拖动累计手指位移（负=左，正=右）：常态域 1:1 跟手，越界域经饱和函数压缩产生「越远阻力越大」的橡皮筋。
@@ -681,14 +683,14 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                         },
                         onDragEnd = {
                             scope.launch {
-                                // 左滑到删除区 → 吸附到删除态(-yPx)；右滑/未左移 → 回 0；
-                                // 正橡皮筋或左越界橡皮筋 → 分别回 0 / -yPx。
+                                // 左滑到删除区 → 吸附删除态(-yPx)；右滑/未左移 → 回 0；越界右空 → 弹回 0。
                                 val target = if (offsetX.value < 0f) {
                                     if (dragDir.value < 0f) -yPx else 0f
                                 } else {
                                     0f
                                 }
                                 offsetX.animateTo(target, spring())
+                                overBest.animateTo(0f, spring())
                             }
                         },
                     ) { change, dragAmount ->
@@ -699,18 +701,24 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                         }
                         dragAccum.value += dragAmount.x
                         // 显示位移三域：
-                        //  - [-yPx, 0] 内 1:1 跟手；pred -yPx 之后越界左拉，用饱和压缩到 (-yPx-leftPx, -yPx)；
-                        //  - >0 右拉，饱和压缩到 (0, rightPx)。
+                        //  - [-yPx, 0] 内 1:1 跟手（红块右缘未贴屏、右空不动）；
+                        //  - 越过 -yPx：字体+红块主体继续左移 overBest，红块加宽保持右缘贴屏 → 右空被拉长；
+                        //  - >0 右拉：整行饱和压缩到 (0, rightPx)。
                         val d = dragAccum.value
-                        val shown = when {
-                            d < -yPx -> {
-                                val over = -d - yPx
-                                -yPx - leftPx * (1f - exp(-over / leftPx))
+                        if (d < -yPx) {
+                            val over = -d - yPx
+                            val best = leftPx * (1f - exp(-over / leftPx))
+                            scope.launch {
+                                overBest.snapTo(best)
+                                offsetX.snapTo(-yPx - overBest.value)
                             }
-                            d <= 0f -> d
-                            else -> rightPx * (1f - exp(-d / rightPx))
+                        } else {
+                            val shown = if (d <= 0f) d else rightPx * (1f - exp(-d / rightPx))
+                            scope.launch {
+                                offsetX.snapTo(shown)
+                                overBest.snapTo(0f)
+                            }
                         }
-                        scope.launch { offsetX.snapTo(shown) }
                     }
                 }
                 .padding(start = 16.dp)
@@ -726,18 +734,29 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                     fontSize = 12.sp,
                 )
             }
-            // 删除钮：紧贴文字右侧，是整体的一部分；自身再右移 yPx 藏在面板右缘外（被 clipToBounds 裁掉），滑动时随之进入。
+            // 删除钮：占整行末尾；自身再右移 yPx 藏在面板右缘外（被 clipToBounds 裁掉），左滑时随之进入。
             // 贴右缘、上下顶满：无圆角、无内边距，滑到极限时红色右缘恰好对齐屏幕边界。
+            // 越界左拉时，红块 offset 额外多加 overBest 补偿 offsetX 的继续左移，且自身加宽 overBest
+            //  → 字体+红块主体左移而红块右缘仍贴屏，右空被拉长（橡皮筋），松手弹回。
+            val overDp = with(LocalDensity.current) { overBest.value.toDp() }
             Box(
                 modifier = Modifier
-                    .offset { IntOffset(yPx.roundToInt(), 0) }
-                    .width(yDp)
+                    .offset { IntOffset((yPx + overBest.value).roundToInt(), 0) }
+                    .width(yDp + overDp)
                     .fillMaxHeight()
                     .background(DeleteRed)
                     .clickable { onDelete(face) },
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.CenterStart,
             ) {
-                Text(text = "删除", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                // 删字靠左定位、固定左空（约 28dp，接近未拉长时的居中视觉）。
+                // 红块加宽只作用于右半 → 只有右空被拉长，左空不变。
+                Text(
+                    text = "删除",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 28.dp, end = 0.dp),
+                )
             }
         }
     }
