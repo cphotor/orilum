@@ -851,7 +851,8 @@ export class Paginator extends HTMLElement {
                 // 无缝拼接的核心：后一个 view 必须左移 overlap（2 屏），使内容列连续。
                 // left_{i+1} = left_i + w_i − overlap = left_i + pc_i*size，
                 // 即去掉前一个 view 的左右各 1 屏缓冲，让正文页首尾相接。
-                const left = acc - (k > 0 ? overlap : 0)
+                const left = (k === 0 && this.#adjacentIndex(-1) == null) ? acc - this.size
+                    : acc - (k > 0 ? overlap : 0)
                 el.style.position = 'absolute'
                 el.style.top = '0'
                 el.style.left = `${left}px`
