@@ -12,13 +12,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -39,6 +44,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
@@ -55,7 +61,9 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,10 +72,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowInsetsControllerCompat
@@ -86,6 +97,7 @@ import com.orilum.ui.reader.ReaderActivity
 import com.orilum.ui.theme.OrilumTheme
 import com.orilum.util.FileLogger
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import java.io.File
 
 /**
@@ -384,7 +396,7 @@ private val FONT_MIMES = arrayOf(
 private sealed interface SettingsRoute {
     val title: String
     data object Home : SettingsRoute { override val title = "设置" }
-    data object Fonts : SettingsRoute { override val title = "字体" }
+    data object Fonts : SettingsRoute { override val title = "字体管理" }
 }
 
 /** 抽屉面板配色，取自阅读页 reader.html 浅色主题 `--ui-bg` 族，保证两侧观感一致。 */
@@ -478,7 +490,7 @@ private fun SettingsDrawer(
                     )
                 }
                 Text(
-                    text = "设置",
+                    text = current.title,
                     color = PanelText,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -522,7 +534,7 @@ private fun SettingsHomePage(
     LazyColumn(modifier = modifier.fillMaxSize()) {
         item {
             SettingsEntry(
-                label = "字体",
+                label = "字体管理",
                 value = if (fontsCount > 0) "已导入 $fontsCount 个" else null,
                 onClick = onOpenFonts,
                 hasDivider = false,
@@ -577,9 +589,12 @@ private fun SettingsEntry(
     }
 }
 
+/** 字体行左滑露出的删除区底色。 */
+private val DeleteRed = Color(0xFFD9534F)
+
 /**
- * 书架设置二级页「字体」：SAF 多选导入（私有拷贝 + 解析分类入库，跨重启持久），
- * 列出已导入字体、允许逐项删除。这里编辑的是全局字体池，供阅读页按家族选用替换原书字体。
+ * 书架设置二级页「字体管理」：SAF 多选导入（私有拷贝 + 解析分类入库，跨重启持久），
+ * 列出已导入字体、每项左滑露出删除按钮。这里编辑的是全局字体池，供阅读页按家族选用替换原书字体。
  */
 @androidx.compose.runtime.Composable
 private fun ManageFontsPage(
@@ -589,17 +604,11 @@ private fun ManageFontsPage(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxSize().background(PanelBg)) {
-        // 导入区：标题 + 扁平「导入字体…」按钮
+        // 导入区：扁平「导入字体…」按钮
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "字体导入",
-                color = PanelText,
-                fontSize = 16.sp,
-                modifier = Modifier.weight(1f),
-            )
             Text(
                 text = "导入字体…",
                 color = PanelText,
@@ -611,14 +620,6 @@ private fun ManageFontsPage(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "导入后可在阅读页按家族指定替换原书字体。",
-            color = PanelMuted,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
         HorizontalDivider(
             modifier = Modifier.padding(horizontal = 16.dp),
             thickness = 1.dp,
@@ -630,31 +631,88 @@ private fun ManageFontsPage(
             }
         } else {
             fonts.forEach { face ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 名称 + 字重/语言
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = face.displayName, color = PanelText, fontSize = 15.sp)
-                        Text(
-                            text = listOfNotNull(face.subfamily, face.lang).ifEmpty { listOf("无字重名") }.joinToString(" · "),
-                            color = PanelMuted,
-                            fontSize = 12.sp,
-                        )
+                key(face.id) { FontSwipeRow(face = face, onDelete = onDelete) }
+            }
+        }
+    }
+}
+
+/**
+ * 单个字体行（iOS 左滑路线）：把「文字 + 删除钮」看作一个整体一起左右滑动。
+ *  - 整体宽度 = 文字行 x + 删除钮 y；删除钮平时藏在面板右缘外（被 clipToBounds 裁掉，不可见）。
+ *  - 向左滑出的位移上限 = y：文字最多向左滑出 y（y 宽被裁剪），删除钮正好被拉进面板并贴住右缘。
+ *  - 松手带惯性：按挥手速度衰减缓动一段，衰减停止后吸附到 0（关闭）或 -yPx（删除钮贴右）。
+ */
+@androidx.compose.runtime.Composable
+private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
+    // 删除钮宽度 y：既是行内元素宽，也是滑动位移上限。
+    val yDp = 88.dp
+    val yPx = with(LocalDensity.current) { yDp.toPx() }
+    val scope = rememberCoroutineScope()
+    // 整体横向偏移（px，负=向左），范围 [-yPx, 0]；0 关闭，-yPx 删除钮贴右缘完全露出。
+    val offsetX = remember { Animatable(0f) }
+    // 本次拖动「停止前滑动方向」（1=右滑，-1=左滑，0=未动）：每帧按 dragAmount 符号更新，
+    // 无阈值，慢速/少量滑动也能被记录；松手一律按它惯性滑到底，不回弹。
+    val dragDir = remember { mutableFloatStateOf(0f) }
+    // 外层按行内容定高，出界部分用 clipToBounds 裁剪隐藏（删除钮平时在面板右缘外即被裁掉）。
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clipToBounds(),
+    ) {
+        // 整条「文字 + 删除钮」作为单层行，统一平移；起点在最右侧（删除钮在面板外）。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .pointerInput(yPx) {
+                    detectDragGestures(
+                        onDragStart = { dragDir.value = 0f },
+                        onDragEnd = {
+                            scope.launch {
+                                // 仅按「停止前滑动方向」判定（无阈值、不看最终位移、不用速度）：
+                                // 左滑→惯性滑到展开极限(-yPx)；右滑或未动→滑回关闭(0)。
+                                // spring 到位不 overshoot，少量/慢速滑动也顺滑跟手，不回弹。
+                                val target = if (dragDir.value < 0f) -yPx else 0f
+                                offsetX.animateTo(target, spring())
+                            }
+                        },
+                    ) { change, dragAmount ->
+                        change.consume()
+                        // 记录最近一帧的滑动方向（符号即可，不过滤；touch slop 已确保有真实位移）。
+                        if (dragAmount.x != 0f) {
+                            dragDir.value = if (dragAmount.x > 0f) 1f else -1f
+                        }
+                        scope.launch { offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-yPx, 0f)) }
                     }
-                    // 删除按钮
-                    Text(
-                        text = "✕",
-                        color = Color(0xFFB5544E),
-                        fontSize = 18.sp,
-                        modifier = Modifier
-                            .padding(start = 12.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onDelete(face) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
                 }
+                .padding(start = 16.dp)
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 文字列：占据行内扣除删除钮后的宽度。
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = face.displayName, color = PanelText, fontSize = 15.sp)
+                Text(
+                    text = listOfNotNull(face.subfamily, face.lang).ifEmpty { listOf("无字重名") }.joinToString(" · "),
+                    color = PanelMuted,
+                    fontSize = 12.sp,
+                )
+            }
+            // 删除钮：紧贴文字右侧，Y 级整体的一部分；自身再右移 yPx 藏在面板右缘外，滑动时随之进入。
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(yPx.roundToInt(), 0) }
+                    .width(yDp)
+                    .fillMaxHeight()
+                    .padding(vertical = 8.dp, horizontal = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(DeleteRed)
+                    .clickable { onDelete(face) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(text = "删除", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
