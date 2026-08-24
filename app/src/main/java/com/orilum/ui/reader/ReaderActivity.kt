@@ -29,6 +29,8 @@ import com.orilum.data.book.BookReadingState
 import com.orilum.data.book.BookRepository
 import com.orilum.data.font.FontFace
 import com.orilum.data.font.FontRepository
+import com.orilum.data.settings.BookSettings
+import com.orilum.data.settings.BookSettingsStore
 import com.orilum.data.settings.ReaderSettings
 import com.orilum.data.settings.ReaderSettingsStore
 import com.orilum.util.FileLogger
@@ -66,6 +68,7 @@ class ReaderActivity : ComponentActivity() {
 
     private lateinit var repository: BookRepository
     private lateinit var settingsStore: ReaderSettingsStore
+    private lateinit var bookSettingsStore: BookSettingsStore
     private lateinit var fontRepository: FontRepository
     private lateinit var scope: kotlinx.coroutines.CoroutineScope
 
@@ -201,6 +204,7 @@ class ReaderActivity : ComponentActivity() {
         scope = lifecycleScope
         repository = BookRepository(AppDatabase.get(this).bookDao())
         settingsStore = ReaderSettingsStore(File(filesDir, "settings"))
+        bookSettingsStore = BookSettingsStore(File(filesDir, "settings"))
         fontRepository = FontRepository(this)
         // 恢复上次选择并持久化的字体目录（含其 SAF 权限），使字体候选跨重启保持
         prefs.getString(KEY_FONT_DIR, null)?.let { savedTree ->
@@ -311,6 +315,8 @@ class ReaderActivity : ComponentActivity() {
                 bridge,
                 { savedLocator },
                 settingsStore,
+                bookSettingsStore,
+                { bookId },
                 fontRepository,
                 { exitImmersiveAndPickFontDir() },
                 { finish() },
@@ -538,6 +544,8 @@ class EPUBBridge(
     private val cb: LocatorCallback,
     private val savedLocatorProvider: () -> String?,
     private val settingsStore: ReaderSettingsStore,
+    private val bookSettingsStore: BookSettingsStore,
+    private val bookIdProvider: () -> Long,
     private val fontRepository: FontRepository,
     private val pickFontDirectory: () -> Unit,
     private val exit: () -> Unit,
@@ -556,19 +564,40 @@ class EPUBBridge(
     @JavascriptInterface
     fun getSavedLocator(): String? = savedLocatorProvider()
 
-    /** 返回当前生效设置 JSON（用户套；无则默认套）。 */
+    /** 返回当前生效设置 JSON（全局 + 当前书覆盖层合并）。 */
     @JavascriptInterface
-    fun getSettings(): String = settingsStore.load().toJson(2)
+    fun getSettings(): String {
+        val global = settingsStore.load()
+        val bookId = bookIdProvider()
+        return if (bookId >= 0) {
+            val overlay = bookSettingsStore.load(bookId)
+            global.applyOverlay(overlay).toJson(2)
+        } else {
+            global.toJson(2)
+        }
+    }
 
-    /** 保存用户设置（覆盖式写入整份 JSON）。 */
+    /** 保存用户设置：拆分写入当前书覆盖层 + 回写全局记忆。 */
     @JavascriptInterface
-    fun saveSettings(json: String?): Boolean = ReaderSettings.fromJson(json)
-        .let { settingsStore.save(it); log("saveSettings -> theme=${it.theme}") ; true }
+    fun saveSettings(json: String?): Boolean {
+        if (json.isNullOrBlank()) return false
+        val bookId = bookIdProvider()
+        // 从 JS 回传的完整 JSON 提取覆盖层字段
+        val overlay = BookSettings.fromReaderSettingsJson(json)
+        // 写入当前书覆盖层（非空时才落盘）
+        if (bookId >= 0) bookSettingsStore.save(bookId, overlay)
+        // 回写全局记忆（逐项传染）
+        settingsStore.saveMerged(overlay)
+        log("saveSettings -> overlay applied")
+        return true
+    }
 
-    /** 一键重置设置：删除用户套，之后返回默认套 JSON。 */
+    /** 一键重置设置：删除全局用户套 + 当前书覆盖层，之后返回默认套 JSON。 */
     @JavascriptInterface
     fun resetSettings(): String {
         settingsStore.reset()
+        val bookId = bookIdProvider()
+        if (bookId >= 0) bookSettingsStore.reset(bookId)
         val d = ReaderSettings.DEFAULT
         log("resetSettings -> DEFAULT")
         return d.toJson(2)

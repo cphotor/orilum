@@ -116,6 +116,64 @@ data class ReaderSettings(
         put("brightnessGestureTwo", brightnessGestureTwo)
     }
 
+    /**
+     * 叠加某本书的私有覆盖层 → 返回生效值。
+     *
+     * [overlay] 中非 null 字段覆盖全局记忆，null 字段回退 [this]。
+     * 不会修改 [this]。
+     */
+    fun applyOverlay(overlay: BookSettings): ReaderSettings = copy(
+        layoutTheme = overlay.layoutTheme ?: layoutTheme,
+        fontSize = overlay.fontSize ?: fontSize,
+        fontScale = overlay.fontScale ?: fontScale,
+        lineSpacing = overlay.lineSpacing ?: lineSpacing,
+        paragraphSpacing = overlay.paragraphSpacing ?: paragraphSpacing,
+        paragraphGap = overlay.paragraphGap ?: paragraphGap,
+        marginTop = overlay.marginTop ?: marginTop,
+        marginBottom = overlay.marginBottom ?: marginBottom,
+        marginLeft = overlay.marginLeft ?: marginLeft,
+        marginRight = overlay.marginRight ?: marginRight,
+        scheme = overlay.scheme ?: scheme,
+        bgOverride = overlay.bgOverride ?: bgOverride,
+        fgOverride = overlay.fgOverride ?: fgOverride,
+        fontBody = overlay.fontBody ?: fontBody,
+        fontTitle = overlay.fontTitle ?: fontTitle,
+        fontCode = overlay.fontCode ?: fontCode,
+        fontBold = overlay.fontBold ?: fontBold,
+        fontItalic = overlay.fontItalic ?: fontItalic,
+        useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
+        pageAnim = overlay.pageAnim ?: pageAnim,
+    )
+
+    /**
+     * 将某本书的覆盖层**回写**到全局记忆。
+     *
+     * [overlay] 中非 null 字段更新 [this]；null 字段保持 [this] 不变。
+     * 返回新 [ReaderSettings] 实例。
+     */
+    fun mergeFrom(overlay: BookSettings): ReaderSettings = copy(
+        layoutTheme = overlay.layoutTheme ?: layoutTheme,
+        fontSize = overlay.fontSize ?: fontSize,
+        fontScale = overlay.fontScale ?: fontScale,
+        lineSpacing = overlay.lineSpacing ?: lineSpacing,
+        paragraphSpacing = overlay.paragraphSpacing ?: paragraphSpacing,
+        paragraphGap = overlay.paragraphGap ?: paragraphGap,
+        marginTop = overlay.marginTop ?: marginTop,
+        marginBottom = overlay.marginBottom ?: marginBottom,
+        marginLeft = overlay.marginLeft ?: marginLeft,
+        marginRight = overlay.marginRight ?: marginRight,
+        scheme = overlay.scheme ?: scheme,
+        bgOverride = overlay.bgOverride ?: bgOverride,
+        fgOverride = overlay.fgOverride ?: fgOverride,
+        fontBody = overlay.fontBody ?: fontBody,
+        fontTitle = overlay.fontTitle ?: fontTitle,
+        fontCode = overlay.fontCode ?: fontCode,
+        fontBold = overlay.fontBold ?: fontBold,
+        fontItalic = overlay.fontItalic ?: fontItalic,
+        useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
+        pageAnim = overlay.pageAnim ?: pageAnim,
+    )
+
     companion object {
         /** 默认套：即未做任何定制时的出厂值。 */
         val DEFAULT = ReaderSettings()

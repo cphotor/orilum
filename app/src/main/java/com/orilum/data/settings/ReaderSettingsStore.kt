@@ -35,6 +35,17 @@ class ReaderSettingsStore(private val settingsDir: File) {
         }
     }
 
+    /**
+     * 将某本书的覆盖层回写到全局记忆：读当前全局 → [ReaderSettings.mergeFrom] → 写回。
+     *
+     * 每本书内改动的「可覆盖项」都会传染到全局记忆，下本书若无覆盖层则默认继承。
+     */
+    fun saveMerged(overlay: BookSettings) {
+        val current = load()
+        val updated = current.mergeFrom(overlay)
+        save(updated)
+    }
+
     /** 一键重置：删除用户套文件，之后 [load] 回退默认。 */
     fun reset() {
         if (file.exists()) file.delete()
