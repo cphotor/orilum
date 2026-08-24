@@ -741,18 +741,14 @@ export class Paginator extends HTMLElement {
         this.#pageMargin = { top, right, bottom, left }
         this.render()
     }
-    /** 封面页撑满整屏（无左右白边）；正文页恢复可读栏宽。
-     *  封面被当作普通阅读页套了栏约束，容器比视口窄，图片因此左右留白。
-     *  直接改写 #top 网格列，令 #container（第 2~4 列）在封面页独占整排宽撑满视口；
-     *  仅主页是封面时生效（翻页离开封面自动恢复）。 */
-    #applyCoverspan() {
-        const main = this.#viewMap.get(this.#index)
-        const full = !!main?.isCover
-        // 封面页：直接改写 #top 网格列，令 #container（第 2~4 列）独占整排宽撑满视口。
-        // 比改 --_gap / --_max-inline-size 可靠——本 fork 的容器宽度不受这两个变量影响。
+    /** 只要有封面色，就让网格保持整宽，避免用窄栏先渲染封面再拉宽产生的「先白边后消除」闪烁。
+     *  封面被当作普通阅读页套了栏约束，容器比视口窄。直接改写 #top 网格列令
+     *  #container（第 2~4 列）独占整排宽；窗口内无封面时恢复可读窄栏（正文不受影响）。 */
+    #syncCoverGrid() {
+        const hasCover = [...this.#viewMap.values()].some(v => v.isCover)
         const overridden = this.#top.style.getPropertyValue('grid-template-columns')
-        if (full !== (overridden !== '')) {
-            if (full)
+        if (hasCover !== (overridden !== '')) {
+            if (hasCover)
                 this.#top.style.setProperty('grid-template-columns', '0px 0px minmax(0, 1fr) 0px 0px')
             else
                 this.#top.style.removeProperty('grid-template-columns')
@@ -824,6 +820,8 @@ export class Paginator extends HTMLElement {
                 },
             }))
             this.#viewMap.set(index, view)
+            // 封面 view 一进窗口就让网格保持整宽，使其从首次布局就用宽栏渲染（消除先白边后拉窄的闪烁）
+            this.#syncCoverGrid()
             // 重排并补偿主 View 偏移（预读 View 从左侧加入会右移主 View 位置）
             this.#compensateMain()
             return view
@@ -953,7 +951,7 @@ export class Paginator extends HTMLElement {
             }
         }
         this.#layoutViews()
-        this.#applyCoverspan()
+        this.#syncCoverGrid()
         // 滚动补偿：卸载左侧 View / margin 变化会使主 View 内容左移，
         // 用主 View 偏移差同步滚动位置与 scrollBounds 锚点，保持视觉连续。
         const mainAfter = this.#offsets.get(index) ?? 0
@@ -987,7 +985,7 @@ export class Paginator extends HTMLElement {
             }
         }
         this.#layoutViews()
-        this.#applyCoverspan()
+        this.#syncCoverGrid()
     }
     #replaceBackground(background, columnCount) {
         const doc = this.#view?.document
