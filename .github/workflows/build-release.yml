@@ -32,6 +32,8 @@ jobs:
       - name: Materialize keystore from secret
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          # 输出解码后 keystore 的 SHA-1，便于与本地 (keystore/orilum-release.jks) 比对是否一致。
+          sha1sum "$RUNNER_TEMP/keystore.jks"
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
 
