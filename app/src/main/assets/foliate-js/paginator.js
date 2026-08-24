@@ -197,11 +197,13 @@ const setStylesImportant = (el, styles) => {
     for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, 'important')
 }
 
-/** 是否「封面页」：首页（spine[0]）且以一张大图为主、几乎无正文。
- *  命中则取消该页四向页边距，使封面图可整屏铺满（object-fit:contain → 至少一维贴边）。 */
+/** 是否「封面页」：首页（spine[0]）且以一张大图/占满整页的矢量封面为主、几乎无正文。
+ *  命中则取消该页四向页边距，使封面图可整屏铺满（object-fit:contain → 至少一维贴边）。
+ *  识别须兼容 `<img>`、`<svg><image>` 等常见封面形态（许多 EPU B 封面用 svg 承载）。 */
 const isCoverLike = doc => {
     if (!doc?.body) return false
-    if (!doc.body.querySelector('img')) return false
+    const hasVisual = doc.body.querySelector('img, svg, picture, video')
+    if (!hasVisual) return false
     const textLen = (doc.body.textContent ?? '').trim().length
     return textLen < 500
 }
@@ -221,6 +223,8 @@ class View {
     pageCount = 0
     /** 是否已完成首次尺寸设置（首次必须强制设置，即使 pageCount 为 0，避免 iframe 保持 100% 宽被裁剪）。 */
     #expanded = false
+    /** 最近一次据此重设 element/iframe 尺寸的 screen size，检测「size 变了但 pageCount 没变」的尺寸漂移。 */
+    #sizedFor = 0
     #layout = {}
     // 四向页边距（px）：由 Paginator 经 #beforeRender 转发，columnize 据此写入每页内容内边距。
     #pageMargin = null
@@ -382,6 +386,31 @@ class View {
         // max-width 恒 100%（整屏列宽），object-fit:contain → 至少一维贴边，实现整屏封面。
         const effMargin = this.isCover ? 0 : (margin ?? 0)
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
+            // 封面矢量图：让 svg 撑满整页（配合封面样式 html,body,body>*{height:100%}）。
+            // 关键：许多 svg 封面的 viewBox 比其内嵌 <image> 小（出版社做成裁切封皮），
+            // 直接按 viewBox 渲染会裁掉图片右/下内容。把 viewBox 改成 <image> 全图尺寸、
+            // 保持 preserveAspectRatio=none，令完整封面拉伸填满整页，不裁切。
+            if (this.isCover && el.tagName.toLowerCase() === 'svg') {
+                const sub = el.querySelector('image')
+                const iw = sub ? parseFloat(sub.getAttribute('width')) : NaN
+                const ih = sub ? parseFloat(sub.getAttribute('height')) : NaN
+                if (iw > 0 && ih > 0) {
+                    el.setAttribute('viewBox', `0 0 ${iw} ${ih}`)
+                    el.setAttribute('preserveAspectRatio', 'none')
+                }
+                setStylesImportant(el, {
+                    'width': '100% !important',
+                    'height': '100% !important',
+                    'max-width': 'none',
+                    'max-height': 'none',
+                    'object-fit': 'fill',
+                    'display': 'block',
+                    'page-break-inside': 'avoid',
+                    'break-inside': 'avoid',
+                    'box-sizing': 'border-box',
+                })
+                continue
+            }
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
@@ -415,8 +444,11 @@ class View {
             // 且 #layoutViews 以 100% 宽（1 屏）参与 offset 累加会算出负偏移，导致整页空白。
             // 仅在 pageCount 变化时重设尺寸：多 View 拼接下 expand 可能被反复调用，
             // 每次都重设会触发「expand → 尺寸变 → body 重排 → observer → expand」自反馈循环。
-            if (this.pageCount !== pageCount || !this.#expanded) {
+            // 但「pageCount 未变而 #size 已变」时也必须重设：否则 iframe/element 停在旧尺寸，
+            // 内容按新尺寸撑开却溢出旧裁剪区 → 右侧被裁 / 水平错位（封面横切、短章偏左同源）。
+            if (this.pageCount !== pageCount || !this.#expanded || this.#sizedFor !== this.#size) {
                 this.pageCount = pageCount
+                this.#sizedFor = this.#size
                 const expandedSize = Math.max(pageCount, 1) * this.#size
                 this.#element.style.padding = '0'
                 this.#iframe.style[side] = `${expandedSize}px`
@@ -709,6 +741,24 @@ export class Paginator extends HTMLElement {
         this.#pageMargin = { top, right, bottom, left }
         this.render()
     }
+    /** 封面页撑满整屏（无左右白边）；正文页恢复可读栏宽。
+     *  封面被当作普通阅读页套了栏约束，容器比视口窄，图片因此左右留白。
+     *  直接改写 #top 网格列，令 #container（第 2~4 列）在封面页独占整排宽撑满视口；
+     *  仅主页是封面时生效（翻页离开封面自动恢复）。 */
+    #applyCoverspan() {
+        const main = this.#viewMap.get(this.#index)
+        const full = !!main?.isCover
+        // 封面页：直接改写 #top 网格列，令 #container（第 2~4 列）独占整排宽撑满视口。
+        // 比改 --_gap / --_max-inline-size 可靠——本 fork 的容器宽度不受这两个变量影响。
+        const overridden = this.#top.style.getPropertyValue('grid-template-columns')
+        if (full !== (overridden !== '')) {
+            if (full)
+                this.#top.style.setProperty('grid-template-columns', '0px 0px minmax(0, 1fr) 0px 0px')
+            else
+                this.#top.style.removeProperty('grid-template-columns')
+            void this.#top.offsetWidth // 强制 reflow
+        }
+    }
     open(book) {
         this.bookDir = book.dir
         this.sections = book.sections
@@ -750,7 +800,8 @@ export class Paginator extends HTMLElement {
                 if (index === 0 && isCoverLike(doc)) {
                     view.isCover = true
                     const $coverStyle = doc.createElement('style')
-                    $coverStyle.textContent = 'html, body { margin: 0 !important; padding: 0 !important; }'
+                    $coverStyle.textContent =
+                        'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
                     doc.head.append($coverStyle)
                     this.#coverStyleMap.set(doc, $coverStyle)
                 }
@@ -902,6 +953,7 @@ export class Paginator extends HTMLElement {
             }
         }
         this.#layoutViews()
+        this.#applyCoverspan()
         // 滚动补偿：卸载左侧 View / margin 变化会使主 View 内容左移，
         // 用主 View 偏移差同步滚动位置与 scrollBounds 锚点，保持视觉连续。
         const mainAfter = this.#offsets.get(index) ?? 0
@@ -935,6 +987,7 @@ export class Paginator extends HTMLElement {
             }
         }
         this.#layoutViews()
+        this.#applyCoverspan()
     }
     #replaceBackground(background, columnCount) {
         const doc = this.#view?.document
