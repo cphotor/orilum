@@ -76,7 +76,6 @@
 
 ### WebView + foliate-js 渲染
 - **依赖拉取**：Gradle 任务 `downloadFoliateJs` / `fetchFoliateJs` 构建期从 npm 镜像下载 foliate-js 1.0.1 到 `assets/foliate-js`。
-- **示例书**：`sample-epub-src/` 源码 + `makeSampleEpub` 打包成合法 EPUB3 到 `assets/sample/sample.epub`，含一长章节验证多屏分页。
 - **渲染管线**：`reader.html` 引入 `<foliate-view flow="paginated">`，fetch 书 → open → init；三区点击翻页；`relocate` 上报；JSBridge `EPUBBridge` 上报 Kotlin。`ReaderActivity` 用 `WebViewAssetLoader` 走 `https://appassets.androidplatform.net/assets/...` 解决 ES Module/fetch 跨域。
 - **真机验证**（平板 1840×2800，Android 14）：单栏整页排版、三区翻页、长章多屏推进均可用。
 

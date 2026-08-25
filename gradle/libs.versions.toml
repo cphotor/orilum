@@ -13,7 +13,6 @@ room = "2.6.1"
 webkit = "1.12.1"
 junit = "4.13.2"
 json = "20240303"
-documentfile = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -39,9 +38,6 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 
 # WebView（本地资源经 https 虚拟域服务 ES Module）
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
-
-# SAF 目录树遍历（字体指定目录导入）
-androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 
 # 单元测试
 junit = { group = "junit", name = "junit", version.ref = "junit" }

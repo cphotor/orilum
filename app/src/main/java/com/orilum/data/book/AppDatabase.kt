@@ -17,10 +17,12 @@ import com.orilum.data.font.FontFace
  * v4：新增 font_faces 表（系统 + 导入字体池），family_name 唯一。
  * v5：font_faces 增加 subfamily 列（字重/样式），家族内多字重文件归并候选时优先 Regular。
  * v6：唯一索引并入 subfamily——同家族多字重文件并存，渲染时按字重归档。
+ * v7：书籍/字体文件改存**用户指定的公共目录**（SAF 持久授权），`Book.filePath`/`FontFace.path`
+ *     从私有绝对路径改为公共目录内的 content:// uri。旧私有路径数据全部失效，按「重置」语义清空重导。
  */
 @Database(
     entities = [Book::class, BookReadingState::class, FontFace::class],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -108,6 +110,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7：书籍/字体文件改存公共目录后，旧的私有绝对路径数据全部失效。按「重置」语义：
+         * 清空 books / reading_states / font_faces 全部行，让用户从干净开始重新指定目录并导入。
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM books")
+                db.execSQL("DELETE FROM reading_states")
+                db.execSQL("DELETE FROM font_faces")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -117,7 +131,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build().also { instance = it }
             }
     }
 }

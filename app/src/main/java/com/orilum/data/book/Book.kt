@@ -4,13 +4,13 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * 书架上的书（M0 简版）。
+ * 书架上的书。
  *
- * 元数据 +【本地书文件路径】——`filePath` 指向导入时拷贝进 App 私有目录
- * `filesDir/books/` 的 epub 副本。书一经导入即应用持有，不受 SAF content://
- * 授权生命周期影响，重启后仍可直接读取。
+ * 元数据 +【本地书文件位置】——`filePath` 是公共书库目录内 EPUB 的 `content://` 文档 uri
+ * （经 SAF 持久授权，重启后仍可直接读取）。书本体存公共目录、用户可见可共享；
+ * 书名/作者/阅读进度等元数据存私有 Room。
  *
- * @property filePath 私有目录内 EPUB 副本的绝对路径。
+ * @property filePath 公共书库目录内 EPUB 的 content:// uri。
  */
 @Entity(tableName = "books")
 data class Book(

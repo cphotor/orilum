@@ -52,18 +52,17 @@ fun interface LocatorCallback {
  * 结构：
  *  - 经 [WebViewAssetLoader] 用 `https://appassets.androidplatform.net/assets/...`
  *    服务 assets 中的 foliate-js 与 reader.html，满足 ES Module 动态导入与 fetch。
- *  - reader.html 内建 `<foliate-view flow="paginated">`，读取 assets 内示例书
- *    `assets/sample/sample.epub` 渲染第一章。
+ *  - reader.html 内建 `<foliate-view flow="paginated">`，通过虚拟域 `current.epub` 加载当前书。
  *  - 通过 [addJavascriptInterface] 暴露 [EPUBBridge]，接收 relocate 与日志上报。
  */
 class ReaderActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
 
-    /** 当前要打开的书（私有目录内 epub 副本路径；null → 回退内置示例书，便于快速自测）。 */
+    /** 当前要打开的书（公共书库目录内 epub 的 content:// uri）；null 表示无书源。 */
     private var bookPath: String? = null
 
-    /** 对应书在主键；>=0 才做进度存取。示例书（无 id）只读不存。 */
+    /** 对应书在主键；>=0 才做进度存取。 */
     private var bookId: Long = -1L
 
     private lateinit var repository: BookRepository
@@ -114,7 +113,7 @@ class ReaderActivity : ComponentActivity() {
         return runCatching { java.net.URLDecoder.decode(seg, "UTF-8") }.getOrNull() ?: seg
     }
 
-    /** 提供当前书字节；无书时回退 assets 里的示例书，供快速验证渲染管线。 */
+    /** 提供当前书字节；无书（本机无可用书源）返回 null。 */
     private val bookHandler = WebViewAssetLoader.PathHandler { path ->
         // WebViewAssetLoader 传入的 path 无前导斜杠（如 "current.epub"）
         if (path == "current.epub") openBookStream() else null
@@ -123,8 +122,13 @@ class ReaderActivity : ComponentActivity() {
     private fun openBookStream(): WebResourceResponse? {
         val path = bookPath
         val data = runCatching {
-            if (path != null && File(path).isFile) File(path).readBytes()
-            else assets.open("sample/sample.epub").use { it.readBytes() }
+            when {
+                path?.startsWith("content://") == true ->
+                    contentResolver.openInputStream(Uri.parse(path))?.use { it.readBytes() }
+                path != null && File(path).isFile ->
+                    File(path).readBytes()
+                else -> null
+            }
         }.onFailure {
             Log.e(TAG, "读取书源失败 path=$path", it)
             FileLogger.e(TAG, "读取书源失败 path=$path", it)

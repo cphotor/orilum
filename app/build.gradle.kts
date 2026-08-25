@@ -2,10 +2,6 @@ import org.gradle.api.Action
 import com.android.build.gradle.api.ApplicationVariant
 import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import java.net.URI
-import java.util.zip.CRC32
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -121,8 +117,6 @@ dependencies {
 
     // WebView 资源走 https 虚拟域，满足 ES Module / fetch
     implementation(libs.androidx.webkit)
-    // SAF 目录树遍历（指定字体目录导入）
-    implementation(libs.androidx.documentfile)
 
     // 单元测试
     testImplementation(libs.junit)
@@ -134,63 +128,3 @@ dependencies {
 // 说明：foliate-js 已高度定制（三窗口跨章、翻页吸附、四向独立页边距、分页切分等），
 // 已纳入本仓库版本管理（app/src/main/assets/foliate-js/），不再从官方 npm 下载/覆盖。
 // 升级 foliate-js 时，直接替换目录内文件并提交即可。
-
-/**
- * 把 sample-epub-src/ 打包成合法的 EPUB3 zip 到 assets/sample/sample.epub。
- * 遵循 EPUB 规范：mimetype 首条目且 STORED(不压缩)。
- */
-val sampleSrcDir = project.layout.projectDirectory.dir("sample-epub-src")
-val sampleEpubFile = project.layout.projectDirectory.file("src/main/assets/sample/sample.epub")
-
-val makeSampleEpub by tasks.registering {
-    inputs.dir(sampleSrcDir)
-    outputs.file(sampleEpubFile)
-    doLast {
-        val baseFile = sampleSrcDir.asFile
-        val files = sampleSrcDir.asFile.walkTopDown()
-            .filter { it.isFile }
-            .sortedWith(compareBy({ it.name != "mimetype" }, { it.toRelativeString(baseFile) }))
-            .toList()
-        val out = sampleEpubFile.asFile
-        out.parentFile.mkdirs()
-        ZipOutputStream(out.outputStream().buffered()).use { zos ->
-            files.forEach { f ->
-                val rel = f.toRelativeString(baseFile)
-                val entry = ZipEntry(rel.replace(File.separatorChar, '/'))
-                if (rel == "mimetype") {
-                    entry.method = ZipEntry.STORED
-                    val size = f.length()
-                    entry.size = size
-                    entry.compressedSize = size
-                    entry.crc = CRC32().let { crc ->
-                        f.inputStream().use { input ->
-                            val buf = ByteArray(8192)
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                crc.update(buf, 0, n)
-                            }
-                        }
-                        crc.value
-                    }
-                } else {
-                    entry.method = ZipEntry.DEFLATED
-                }
-                zos.putNextEntry(entry)
-                f.inputStream().use { it.copyTo(zos) }
-                zos.closeEntry()
-            }
-        }
-        logger.lifecycle("已生成示例书: ${sampleEpubFile.asFile}")
-    }
-}
-
-afterEvaluate {
-    // 构建期先打包示例书，供读写 assets 的任务消费：
-    // 编译打包要合并 assets（merge*Assets），release 的 lint 静态检查也要读 assets 下的 sample.epub（generateReleaseLintVital*）。
-    tasks.matching { t ->
-        t.name == "mergeDebugAssets" ||
-        t.name == "mergeReleaseAssets" ||
-        t.name.contains("lintVital", ignoreCase = true)
-    }.configureEach { dependsOn(makeSampleEpub) }
-}

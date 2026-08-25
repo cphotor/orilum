@@ -143,6 +143,7 @@ class FontParser {
         private const val ID_FAMILY = 1
         private const val ID_SUBFAMILY = 2
         private const val ID_TYPOGRAPHIC_FAMILY = 16
+        private const val ID_TYPOGRAPHIC_SUBFAMILY = 17
 
         private class CjkCollector(private val name: String, private val lo: Int, private val hi: Int) {
             var total = 0
@@ -181,12 +182,18 @@ class FontParser {
 
         /**
          * 读 'name' 表指定 nameID 的名字。family 优先 nameID=16(Typographic，不含字重、同家族一致)，
-         * 缺失才回退 nameID=1；subfamily 用 nameID=2。在全部候选记录里**优先取含中文字形的名字**，
+         * 缺失才回退 nameID=1；subfamily 优先 nameID=17(Typographic Subfamily，含真实字重)，
+         * 缺失才回退 nameID=2 —— 因为思源这类 CJK 字体在 nameID=2 里除 Regular/Bold 外常退化成
+         * "Regular"，17 才存 Light/Heavy 等真实字重。在全部候选记录里**优先取含中文字形的名字**，
          * 否则退回可读的拉丁名——解决同一字体的中文/英文名并存时（如「霞鹜文楷 / LXGW WenKai」）
          * 误取英文的问题。
          */
         private fun readName(bytes: ByteArray, info: TableInfo, nameId: Int): String? {
-            val preferred = if (nameId == ID_FAMILY) listOf(16, 1) else listOf(nameId)
+            val preferred = when (nameId) {
+                ID_FAMILY -> listOf(ID_TYPOGRAPHIC_FAMILY, ID_FAMILY)
+                ID_SUBFAMILY -> listOf(ID_TYPOGRAPHIC_SUBFAMILY, ID_SUBFAMILY)
+                else -> listOf(nameId)
+            }
             for (pref in preferred) {
                 collectNames(bytes, info, pref).let { c ->
                     if (c.isNotEmpty()) {

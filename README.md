@@ -61,21 +61,19 @@ Orilum 是一款面向安卓平板与手机的 EPUB 阅读器，计划是做**�
 
 ```
 app/
-  build.gradle.kts           # 含 foliate-js 拉取任务、示例书制作任务
+  build.gradle.kts           # 含 foliate-js 拉取任务
   src/main/
     assets/
       reader.html            # 阅读器 WebView 壳（foliate-view + 工具栏 + 设置面板 + JS 逻辑）
       foliate-js/            # 构建期自动下载（paginator.js 为本地定制引擎版，见「对引擎的本地定制」）
-      sample/sample.epub     # 构建期自动生成的示例书
     java/com/orilum/
-      MainActivity.kt        # 书架占位 + 打开示例书
+      MainActivity.kt        # 书架
       ui/reader/ReaderActivity.kt  # WebView 宿主：资源拦截、JSBridge、沉浸式/状态栏、亮度
       data/                  # 解析层 / 书库 / 字体 / 进度 / 设置（Room）
       util/FileLogger.kt     # 内置文件日志（绕开 OEM 系统 logcat 限流）
     res/
   gradle/libs.versions.toml  # 依赖版本目录
   docs/                      # 设计与进度文档
-  sample-epub-src/           # 示例书源码（构建期打成合法 EPUB3）
   licenses/FOLIATE-JS-LICENSE  # foliate-js 的 MIT 许可证
   LICENSE                    # 本项目（Orilum 自身代码）的 MIT 许可证
 ```
@@ -95,13 +93,10 @@ app/
 ```bash
 # 构建并安装 debug 包到已连接设备
 ./gradlew :app:installDebug
-
-# 安装后注意：书架「打开示例书」即可体验（无需先 SAF 选书）
 ```
 
 构建期自动执行的 Gradle 任务（勿手动干预）：
 - `downloadFoliateJs` / `fetchFoliateJs` —— 从 npmmirror 下载并解包 foliate-js 到 `assets/foliate-js`（**排除官方 `paginator.js`**，保留本地定制版；该文件已 force-add 纳入版本控制）。
-- `makeSampleEpub` —— 把 `sample-epub-src/` 打包成合法 EPUB3（mimetype 首条目 + STORED）到 `assets/sample/sample.epub`。
 
 ### CI 自动构建（GitHub Actions）
 
