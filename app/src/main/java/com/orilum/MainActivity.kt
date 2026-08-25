@@ -453,6 +453,8 @@ private fun SettingsDrawer(
     val stack = remember { mutableStateListOf<SettingsRoute>(SettingsRoute.Home) }
     val current = stack.last()
     val scope = rememberCoroutineScope()
+    // 抽屉关闭时重置回 Home 主页，确保下次打开显示顶级菜单。
+    LaunchedEffect(show) { if (!show) { stack.clear(); stack.add(SettingsRoute.Home) } }
     // 字体池共享状态：主页显示已导入数量，字体子页导入/删除后刷新。
     var fonts by remember { mutableStateOf<List<FontFace>>(emptyList()) }
     LaunchedEffect(Unit) { fonts = fontRepository.list() }
