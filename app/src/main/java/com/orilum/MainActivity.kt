@@ -922,7 +922,7 @@ private fun WifiImportDialog(
                     )
                     addr == null -> Text("正在启动服务器…", color = PanelMuted, fontSize = 14.sp)
                     else -> {
-                        Text("平板与电脑需在同一个 Wi-Fi 下，在电脑浏览器打开下面地址：", color = PanelText, fontSize = 14.sp)
+                        Text("平板与电脑需在同一个局域网内，在电脑浏览器打开下面地址：", color = PanelText, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(10.dp))
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -1130,12 +1130,14 @@ private class WifiFontServer(
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>向平板导入字体</title><style>
             body{font-family:system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 20px;color:#222}
-            h1{font-size:20px}.drop{border:2px dashed #999;border-radius:12px;padding:40px 20px;text-align:center;color:#666}
+            h1{font-size:20px}
+            .drop{background:#2b2b2b;color:#fff;border:none;border-radius:10px;padding:16px 20px;text-align:center;font-size:16px;cursor:pointer}
+            .drop:hover{background:#414141}
             .list{margin-top:20px}.item{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}
             .ok{color:#1a7f37}.err{color:#c0392b}
             </style></head><body>
             <h1>向平板导入字体</h1>
-            <p>选择字体文件（.ttf / .otf / .ttc / .otc），可一次选多个，逐个上传。</p>
+            <p>选择上传字体文件（.ttf / .otf / .ttc / .otc），可多选。</p>
             <div class="drop" id="drop">点击选择文件</div>
             <input type="file" id="file" multiple accept=".ttf,.otf,.ttc,.otc" style="display:none">
             <div class="list" id="list"></div>
