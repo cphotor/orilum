@@ -723,7 +723,8 @@ private fun FontSwipeRow(title: String, subtitle: String, onDelete: () -> Unit) 
             .height(IntrinsicSize.Min)
             .clipToBounds(),
     ) {
-        // 整条「文字 + 删除钮」作为单层行，统一平移；起点在最右侧（删除钮在面板外）。
+        // 文字行：整行随 offsetX 平移。文字列宽度恒定（删除钮不再参与其宽度分配），
+        // 因此滑动时字重列表的折行行数不改变、行高稳定，不会忽高忽低。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -782,19 +783,26 @@ private fun FontSwipeRow(title: String, subtitle: String, onDelete: () -> Unit) 
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 文字列：占据行内扣除删除钮后的宽度。
-            Column(modifier = Modifier.weight(1f)) {
+            // 文字列：铺满整行（无删除钮占位），始终以恒定宽度排布。
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(text = title, color = PanelText, fontSize = 15.sp)
                 Text(text = subtitle, color = PanelMuted, fontSize = 12.sp)
             }
-            // 删除钮：占整行末尾；自身再右移 yPx 藏在面板右缘外（被 clipToBounds 裁掉），左滑时随之进入。
-            // 贴右缘、上下顶满：无圆角、无内边距，滑到极限时红色右缘恰好对齐屏幕边界。
-            // 越界左拉时，红块 offset 额外多加 overBest 补偿 offsetX 的继续左移，且自身加宽 overBest
-            //  → 字体+红块主体左移而红块右缘仍贴屏，右空被拉长（橡皮筋），松手弹回。
-            val overDp = with(LocalDensity.current) { overBest.value.toDp() }
+        }
+        // 删除钮：浮在文字行上方的覆盖层，不参与文字行宽度 → 文字折行行数不随滑动改变。
+        // 自身偏移 = 文字行位移 offsetX + 出屏隐藏 yPx + 越界补偿 overBest（等价原「Row 平移 + 红块内移」合成），
+        // 红块右缘行为与原版一致：平时出屏被裁、左滑贴右、越界仍贴屏且右空拉长。
+        val overDp = with(LocalDensity.current) { overBest.value.toDp() }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .offset { IntOffset((offsetX.value + yPx + overBest.value).roundToInt(), 0) },
+        ) {
+            // 红块本体：贴父容器右缘，上下顶满；自身再右移 yPx 藏在面板右缘外（被 clipToBounds 裁掉）。
+            // 无圆角、无内边距，滑到极限时红色右缘恰好对齐屏幕边界；越界时加宽只作用于右半（右空拉长）。
             Box(
                 modifier = Modifier
-                    .offset { IntOffset((yPx + overBest.value).roundToInt(), 0) }
+                    .align(Alignment.CenterEnd)
                     .width(yDp + overDp)
                     .fillMaxHeight()
                     .background(DeleteRed)
@@ -802,7 +810,6 @@ private fun FontSwipeRow(title: String, subtitle: String, onDelete: () -> Unit) 
                 contentAlignment = Alignment.CenterStart,
             ) {
                 // 删字靠左定位、固定左空（约 28dp，接近未拉长时的居中视觉）。
-                // 红块加宽只作用于右半 → 只有右空被拉长，左空不变。
                 Text(
                     text = "删除",
                     color = Color.White,
