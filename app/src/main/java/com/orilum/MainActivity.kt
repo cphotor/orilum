@@ -355,9 +355,11 @@ private fun ShelfScreen(
             Column(modifier = Modifier.fillMaxWidth().background(BarGray)) {
                 // 按钮行高 56dp 足够容纳「图标+文字」整块并垂直居中；行内上下留白保持紧凑，避免按钮下方出现过多空白。
                 Row(modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    ToolItem(icon = if (gridMode) Icons.Default.List else ImageVector.vectorResource(R.drawable.ic_grid), label = "封面/列表", onClick = onToggleView)
-                    ToolItem(icon = Icons.Default.Add, label = "导入", onClick = onImport)
-                    ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = onEdit)
+                    // 面板开着时，点底部任一功能按钮只先关面板（呈模态：书架除关闭外暂不可操作）；
+                    // 「设置」按钮本身为开关切换，交由 onSettings 处理，不在此拦截。
+                    ToolItem(icon = if (gridMode) Icons.Default.List else ImageVector.vectorResource(R.drawable.ic_grid), label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
+                    ToolItem(icon = Icons.Default.Add, label = "导入", onClick = { if (settingsOpen) onDismissSettings() else onImport() })
+                    ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = { if (settingsOpen) onDismissSettings() else onEdit() })
                     ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
                 }
                 // 底部安全间距：该设备系统导航栏 inset 极小，取一半即可让按钮行避开系统栏，且几乎不留空白。
@@ -383,7 +385,10 @@ private fun ShelfScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(books, key = { it.id }) { book ->
-                        BookCard(book = book, onClick = { onOpenBook(book) })
+                        // 面板打开时书不可点（与底部功能按钮同呈模态），点书仅关闭面板。
+                        BookCard(book = book, onClick = {
+                            if (settingsOpen) onDismissSettings() else onOpenBook(book)
+                        })
                     }
                 }
             }
