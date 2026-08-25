@@ -540,7 +540,7 @@ private fun SettingsDrawer(
             }
             when (current) {
                 SettingsRoute.Home -> SettingsHomePage(
-                    fontsCount = fonts.size,
+                    fontsCount = fonts.map { it.familyName }.distinct().size,
                     onOpenFonts = { stack.add(SettingsRoute.Fonts) },
                     modifier = Modifier.weight(1f),
                 )
@@ -577,7 +577,7 @@ private fun SettingsHomePage(
         item {
             SettingsEntry(
                 label = "字体管理",
-                value = if (fontsCount > 0) "已导入 $fontsCount 个" else null,
+                value = if (fontsCount > 0) "$fontsCount" else null,
                 onClick = onOpenFonts,
                 hasDivider = false,
             )
