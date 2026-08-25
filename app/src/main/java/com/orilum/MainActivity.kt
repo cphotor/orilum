@@ -17,9 +17,10 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -642,8 +643,10 @@ private fun ManageFontsPage(
                 Text(text = "尚未导入字体，点上方「导入字体…」添加", color = PanelMuted, fontSize = 14.sp)
             }
         } else {
-            fonts.forEach { face ->
-                key(face.id) { FontSwipeRow(face = face, onDelete = onDelete) }
+            androidx.compose.foundation.lazy.LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) {
+                items(fonts, key = { it.id }) { face -> FontSwipeRow(face = face, onDelete = onDelete) }
             }
         }
     }
@@ -687,41 +690,38 @@ private fun FontSwipeRow(face: FontFace, onDelete: (FontFace) -> Unit) {
                 .fillMaxWidth()
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
                 .pointerInput(yPx, rightPx, leftPx) {
-                    detectDragGestures(
+                    // detectHorizontalDragGestures：只在横向越过 slop 后才接手，纵向交给父 LazyColumn 滚动。
+                    detectHorizontalDragGestures(
                         onDragStart = {
                             dragDir.value = 0f
                             dragAccum.value = offsetX.value // 从当前偏移继续累计手指位移
                         },
                         onDragEnd = {
                             scope.launch {
-                                // 左滑到删除区 → 吸附删除态(-yPx)；右滑/未左移 → 回 0；越界右空 → 弹回 0。
-                                // offsetX 用低阻尼比 spring：惯性冲到目标位置时适度跑过头，再由弹力拉回（iOS 手感）。
+                                // 左滑到删除区 → 吸附删除态；右滑/未左移 → 回 0；越界右空 → 弹回 0。
                                 val target = if (offsetX.value < 0f) {
                                     if (dragDir.value < 0f) -yPx else 0f
-                                } else {
-                                    0f
-                                }
+                                } else 0f
                                 offsetX.animateTo(
                                     target,
                                     spring(
                                         stiffness = Spring.StiffnessMediumLow,
-                                        dampingRatio = 0.5f, // <1 → 过冲后回弹
+                                        dampingRatio = 0.5f,
                                     ),
                                 )
                                 overBest.animateTo(0f, spring())
                             }
                         },
+                        onDragCancel = {
+                            // 纵向胜出（父列表滚动）：本行不消费，无需吸附；把越界部分归位即可。
+                            scope.launch { offsetX.snapTo(0f); overBest.snapTo(0f) }
+                        },
                     ) { change, dragAmount ->
                         change.consume()
-                        // 记录最近一帧的滑动方向（符号即可）；touch slop 已确保有真实位移。
-                        if (dragAmount.x != 0f) {
-                            dragDir.value = if (dragAmount.x > 0f) 1f else -1f
+                        if (dragAmount != 0f) {
+                            dragDir.value = if (dragAmount > 0f) 1f else -1f
                         }
-                        dragAccum.value += dragAmount.x
-                        // 显示位移三域：
-                        //  - [-yPx, 0] 内 1:1 跟手（红块右缘未贴屏、右空不动）；
-                        //  - 越过 -yPx：字体+红块主体继续左移 overBest，红块加宽保持右缘贴屏 → 右空被拉长；
-                        //  - >0 右拉：整行饱和压缩到 (0, rightPx)。
+                        dragAccum.value += dragAmount
                         val d = dragAccum.value
                         if (d < -yPx) {
                             val over = -d - yPx
