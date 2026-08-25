@@ -464,6 +464,16 @@ private fun SettingsDrawer(
         exit = slideOutHorizontally { it },
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // 面板外空白区：不画遮罩、只消费点击 → 防止穿透到底层书架，点击即关闭整个抽屉。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDismiss,
+                    ),
+            )
             // 右侧停靠、填满内容区高度（顶栏下方 → 底栏上方）。
             Column(
                 modifier = Modifier
