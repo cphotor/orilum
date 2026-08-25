@@ -654,7 +654,19 @@ private fun ManageFontsPage(
             color = PanelDivider,
         )
         // 显示层按家族合并：同家族的字重归并成一行，副行罗列字重；左滑删除以家族为单位。
-        val groups = remember(fonts) { fonts.groupBy { it.familyName } }
+        // 家族条目按字体名排序，中文用 Collator(zh) 做拼音友好排序，避免乱序与纯字节序混乱。
+        val collator = remember { java.text.Collator.getInstance(java.util.Locale.CHINA) }
+        val groups = remember(fonts) {
+            fonts.groupBy { it.familyName }.toSortedMap(
+                Comparator<String> { a, b ->
+                    // 空名垫底，其余按拼音/首字母比较；相等再按原串保证稳定。
+                    if (a.isEmpty()) return@Comparator if (b.isEmpty()) 0 else 1
+                    if (b.isEmpty()) return@Comparator -1
+                    val c = collator.compare(a, b)
+                    if (c != 0) c else a.compareTo(b)
+                }
+            )
+        }
         if (groups.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
                 Text(text = "尚未导入字体，点上方「导入字体…」添加", color = PanelMuted, fontSize = 14.sp)
