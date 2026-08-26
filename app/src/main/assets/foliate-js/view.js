@@ -10,6 +10,13 @@ const isZip = async file => {
     return arr[0] === 0x50 && arr[1] === 0x4b && arr[2] === 0x03 && arr[3] === 0x04
 }
 
+const isPDF = async file => {
+    const arr = new Uint8Array(await file.slice(0, 5).arrayBuffer())
+    return arr[0] === 0x25
+        && arr[1] === 0x50 && arr[2] === 0x44 && arr[3] === 0x46
+        && arr[4] === 0x2d
+}
+
 const isCBZ = ({ name, type }) =>
     type === 'application/vnd.comicbook+zip' || name.endsWith('.cbz')
 
@@ -95,6 +102,10 @@ export const makeBook = async file => {
             const { EPUB } = await import('./epub.js')
             book = await new EPUB(loader).init()
         }
+    }
+    else if (await isPDF(file)) {
+        const { makePDF } = await import('./pdf.js')
+        book = await makePDF(file)
     }
     else {
         const { isMOBI, MOBI } = await import('./mobi.js')
@@ -205,6 +216,8 @@ export class View extends HTMLElement {
     #tocProgress
     #pageProgress
     #searchResults = new Map()
+    #searchDraw
+    #searchDrawOptions
     #cursorAutohider = new CursorAutohider(this, () =>
         this.hasAttribute('autohide-cursor'))
     isFixedLayout = false
@@ -245,7 +258,7 @@ export class View extends HTMLElement {
             await import('./paginator.js')
             this.renderer = document.createElement('foliate-paginator')
         }
-        this.renderer.setAttribute('exportparts', 'head,foot,filter,container')
+        this.renderer.setAttribute('exportparts', 'head,foot,filter')
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
         this.renderer.addEventListener('create-overlayer', e =>
@@ -344,8 +357,8 @@ export class View extends HTMLElement {
             const href_ = a.getAttribute('href')
             const href = section?.resolveHref?.(href_) ?? href_
             if (book?.isExternal?.(href))
-                Promise.resolve(this.#emit('external-link', { a, href }, true))
-                    .then(x => x ? globalThis.open(href, '_blank') : null)
+                Promise.resolve(this.#emit('external-link', { a, href_ }, true))
+                    .then(x => x ? globalThis.open(href_, '_blank') : null)
                     .catch(e => console.error(e))
             else Promise.resolve(this.#emit('link', { a, href }, true))
                 .then(x => x ? this.goTo(href) : null)
@@ -365,7 +378,7 @@ export class View extends HTMLElement {
                     return
                 }
                 const range = doc ? anchor(doc) : anchor
-                overlayer.add(value, range, Overlayer.outline)
+                overlayer.add(value, range, this.#searchDraw, this.#searchDrawOptions)
             }
             return
         }
@@ -391,7 +404,7 @@ export class View extends HTMLElement {
             .find(x => x.index === index && x.overlayer)
     }
     #createOverlayer({ doc, index }) {
-        const overlayer = new Overlayer(doc)
+        const overlayer = new Overlayer()
         doc.addEventListener('click', e => {
             const [value, range] = overlayer.hitTest(e)
             if (value && !value.startsWith(SEARCH_PREFIX)) {
@@ -528,6 +541,8 @@ export class View extends HTMLElement {
     }
     async * search(opts) {
         this.clearSearch()
+        this.#searchDraw = opts.draw ?? Overlayer.outline
+        this.#searchDrawOptions = opts.drawOptions
         const { searchMatcher } = await import('./search.js')
         const { query, index } = opts
         const matcher = searchMatcher(textWalker,
@@ -566,12 +581,12 @@ export class View extends HTMLElement {
             for (const item of list) this.deleteAnnotation(item)
         this.#searchResults.clear()
     }
-    async initTTS(granularity = 'word') {
+    async initTTS(granularity = 'word', highlight) {
         const doc = this.renderer.getContents()[0].doc
         if (this.tts && this.tts.doc === doc) return
         const { TTS } = await import('./tts.js')
-        this.tts = new TTS(doc, textWalker, range =>
-            this.renderer.scrollToAnchor(range, true), granularity)
+        this.tts = new TTS(doc, textWalker, highlight || (range =>
+            this.renderer.scrollToAnchor(range, true)), granularity)
     }
     startMediaOverlay() {
         const { index } = this.renderer.getContents()[0]

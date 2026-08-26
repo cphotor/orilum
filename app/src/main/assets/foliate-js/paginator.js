@@ -19,11 +19,19 @@ const easeOutQuad = x => 1 - (1 - x) * (1 - x)
 const animate = (a, b, duration, ease, render) => new Promise(resolve => {
     let start
     const step = now => {
+        if (document.hidden) {
+            render(lerp(a, b, 1))
+            return resolve()
+        }
         start ??= now
         const fraction = Math.min(1, (now - start) / duration)
         render(lerp(a, b, ease(fraction)))
         if (fraction < 1) requestAnimationFrame(step)
         else resolve()
+    }
+    if (document.hidden) {
+        render(lerp(a, b, 1))
+        return resolve()
     }
     requestAnimationFrame(step)
 })
@@ -158,10 +166,12 @@ const setSelectionTo = (target, collapse) => {
     }
     if (range) {
         const sel = range.startContainer.ownerDocument.defaultView.getSelection()
-        sel.removeAllRanges()
-        if (collapse === -1) range.collapse(true)
-        else if (collapse === 1) range.collapse()
-        sel.addRange(range)
+        if (sel) {
+            sel.removeAllRanges()
+            if (collapse === -1) range.collapse(true)
+            else if (collapse === 1) range.collapse()
+            sel.addRange(range)
+        }
     }
 }
 
@@ -199,7 +209,7 @@ const setStylesImportant = (el, styles) => {
 
 /** 是否「封面页」：首页（spine[0]）且以一张大图/占满整页的矢量封面为主、几乎无正文。
  *  命中则取消该页四向页边距，使封面图可整屏铺满（object-fit:contain → 至少一维贴边）。
- *  识别须兼容 `<img>`、`<svg><image>` 等常见封面形态（许多 EPU B 封面用 svg 承载）。 */
+ *  识别须兼容 `<img>`、`<svg><image>` 等常见封面形态（许多 EPUB 封面用 svg 承载）。 */
 const isCoverLike = doc => {
     if (!doc?.body) return false
     const hasVisual = doc.body.querySelector('img, svg, picture, video')
@@ -209,8 +219,7 @@ const isCoverLike = doc => {
 }
 
 class View {
-    #observer = new ResizeObserver(() => this.#queueExpand())
-    #expandQueued = false
+    #observer = new ResizeObserver(() => this.expand())
     #element = document.createElement('div')
     #iframe = document.createElement('iframe')
     #contentRange = document.createRange()
@@ -219,24 +228,9 @@ class View {
     #rtl = false
     #column = true
     #size
-    /** 最近一次 expand 计算的内容列数（屏）。仅作进度计算用（纯 JS 字段，不改布局）。 */
-    pageCount = 0
-    /** 是否已完成首次尺寸设置（首次必须强制设置，即使 pageCount 为 0，避免 iframe 保持 100% 宽被裁剪）。 */
-    #expanded = false
-    /** 最近一次据此重设 element/iframe 尺寸的 screen size，检测「size 变了但 pageCount 没变」的尺寸漂移。 */
-    #sizedFor = 0
     #layout = {}
-    // 四向页边距（px）：由 Paginator 经 #beforeRender 转发，columnize 据此写入每页内容内边距。
+    // 四向页边距（px）：由 Paginator 经 beforeRender 转发，columnize 据此写入每页内容内边距。
     #pageMargin = null
-    /** ResizeObserver 回调用 rAF 合并，避免「回调内改尺寸 → loop 警告/自反馈」。 */
-    #queueExpand() {
-        if (this.#expandQueued) return
-        this.#expandQueued = true
-        requestAnimationFrame(() => {
-            this.#expandQueued = false
-            this.expand()
-        })
-    }
     constructor({ container, onExpand }) {
         this.container = container
         this.onExpand = onExpand
@@ -279,9 +273,7 @@ class View {
                 // it needs to be visible for Firefox to get computed style
                 this.#iframe.style.display = 'block'
                 const { vertical, rtl } = getDirection(doc)
-                this.docBackground = getBackground(doc)
-                doc.body.style.background = 'none'
-                const background = this.docBackground
+                const background = getBackground(doc)
                 this.#iframe.style.display = 'none'
 
                 this.#vertical = vertical
@@ -304,22 +296,21 @@ class View {
         })
     }
     render(layout) {
-        if (!layout || !this.document) return
+        if (!layout) return
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
-        // 四向页边距经 layout 传入，供 columnize/scrolled 写入每页内容内边距。
         // 封面页（isCover）：取消四向页边距，令其内容整屏铺满、封面图可全屏显示。
         if (layout.pageMargin) this.#pageMargin = this.isCover
             ? { top: 0, right: 0, bottom: 0, left: 0 } : layout.pageMargin
         if (this.#column) this.columnize(layout)
         else this.scrolled(layout)
     }
-    scrolled({ margin, gap, columnWidth }) {
+    scrolled({ gap, columnWidth }) {
         const vertical = this.#vertical
         const doc = this.document
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
-            'padding': vertical ? `${margin*1.5}px ${gap}px` : `0 ${gap}px`,
+            'padding': vertical ? `${gap}px 0` : `0 ${gap}px`,
             'column-width': 'auto',
             'height': 'auto',
             'width': 'auto',
@@ -440,39 +431,27 @@ class View {
                 : this.#rtl ? rootRect.right - contentRect.right : contentRect.left - rootRect.left
             const contentSize = contentStart + contentRect[side]
             const pageCount = Math.ceil(contentSize / this.#size)
-            // 首次必须强制设置尺寸（即使 pageCount 为 0）：否则 iframe 保持初始 100% 宽被裁剪，
-            // 且 #layoutViews 以 100% 宽（1 屏）参与 offset 累加会算出负偏移，导致整页空白。
-            // 仅在 pageCount 变化时重设尺寸：多 View 拼接下 expand 可能被反复调用，
-            // 每次都重设会触发「expand → 尺寸变 → body 重排 → observer → expand」自反馈循环。
-            // 但「pageCount 未变而 #size 已变」时也必须重设：否则 iframe/element 停在旧尺寸，
-            // 内容按新尺寸撑开却溢出旧裁剪区 → 右侧被裁 / 水平错位（封面横切、短章偏左同源）。
-            if (this.pageCount !== pageCount || !this.#expanded || this.#sizedFor !== this.#size) {
-                this.pageCount = pageCount
-                this.#sizedFor = this.#size
-                const expandedSize = Math.max(pageCount, 1) * this.#size
-                this.#element.style.padding = '0'
-                this.#iframe.style[side] = `${expandedSize}px`
-                this.#element.style[side] = `${expandedSize + this.#size * 2}px`
-                this.#iframe.style[otherSide] = '100%'
-                this.#element.style[otherSide] = '100%'
-                if (this.#overlayer) {
-                    this.#overlayer.element.style.margin = '0'
-                    this.#overlayer.element.style.left = this.#vertical ? '0' : `${this.#size}px`
-                    this.#overlayer.element.style.top = this.#vertical ? `${this.#size}px` : '0'
-                    this.#overlayer.element.style[side] = `${expandedSize}px`
-                    this.#overlayer.redraw()
-                }
-                this.onExpand()
-                this.#expanded = true
-            }
+            const expandedSize = pageCount * this.#size
+            this.#element.style.padding = '0'
+            this.#iframe.style[side] = `${expandedSize}px`
+            this.#element.style[side] = `${expandedSize + this.#size * 2}px`
+            this.#iframe.style[otherSide] = '100%'
+            this.#element.style[otherSide] = '100%'
             documentElement.style[side] = `${this.#size}px`
+            if (this.#overlayer) {
+                this.#overlayer.element.style.margin = '0'
+                this.#overlayer.element.style.left = this.#vertical ? '0' : `${this.#size}px`
+                this.#overlayer.element.style.top = this.#vertical ? `${this.#size}px` : '0'
+                this.#overlayer.element.style[side] = `${expandedSize}px`
+                this.#overlayer.redraw()
+            }
         } else {
             const side = this.#vertical ? 'width' : 'height'
             const otherSide = this.#vertical ? 'height' : 'width'
             const contentSize = documentElement.getBoundingClientRect()[side]
             const expandedSize = contentSize
-            const { margin, gap } = this.#layout
-            const padding = this.#vertical ? `0 ${gap}px` : `${margin}px 0`
+            const { margin } = this.#layout
+            const padding = this.#vertical ? `0 ${margin}px` : `${margin}px 0`
             this.#element.style.padding = padding
             this.#iframe.style[side] = `${expandedSize}px`
             this.#element.style[side] = `${expandedSize}px`
@@ -485,8 +464,8 @@ class View {
                 this.#overlayer.element.style[side] = `${expandedSize}px`
                 this.#overlayer.redraw()
             }
-            this.onExpand()
         }
+        this.onExpand()
     }
     set overlayer(overlayer) {
         this.#overlayer = overlayer
@@ -513,41 +492,24 @@ export class Paginator extends HTMLElement {
     #container
     #header
     #footer
-    /** 主 View（= #viewMap.get(#index)）。窗口迁移时更新。 */
     #view
-    /** 章节 View 缓存：index -> View。窗口 = 当前章 + 相邻章（最多 3 个）。 */
-    #viewMap = new Map()
-    /** index -> 该 View element 在容器内的全局偏移（px）。 */
-    #offsets = new Map()
-    /** index -> 正在进行的章节加载 Promise（防重入）。 */
-    #loadPromises = new Map()
-    /** 窗口内全部 View 的总宽度（px），即全局滚动范围。 */
-    #totalSize = 0
-    /** 最近一次窗口迁移/补偿时间戳，用于抑制补偿引发的滚动链式迁移。 */
-    #lastShiftAt = 0
-    /** 撑宽占位 div：absolute 定位的 View 不撑开 #container 的 scrollWidth，用它提供滚动宽度。 */
-    #sizer
     #vertical = false
     #rtl = false
     #margin = 0
     // 宿主通过 setPageMargins() 注入的四向页边距（px）。作为每页内容内边距应用，
-    // 让翻页动画铺满整屏（这是 foliate 的正文 page-选页动画的实际可视区域），
-    // 而不是被外框轨道裁切成只在边框内滑动。
+    // 让翻页动画铺满整屏，而不是被外框轨道裁切成只在边框内滑动。
     #pageMargin = null
     #index = -1
     #anchor = 0 // anchor view to a fraction (0-1), Range, or Element
     #justAnchored = false
-    /** 一次性末页诊断是否已输出过（OriginOS 限流下只发一次，规避丢日志）。 */
-    #diagLastOnce = false
     #locked = false // while true, prevent any further navigation
     #styles
-    /** doc -> [beforeStyle, style] 注入节点。用普通 Map（需可迭代应用到所有 View），destroy 时统一清理。 */
-    #styleMap = new Map()
-    /** doc -> 封面页注入的「整屏铺满」style 节点，destroy 时一并清理。 */
-    #coverStyleMap = new Map()
+    #styleMap = new WeakMap()
     #mediaQuery = matchMedia('(prefers-color-scheme: dark)')
     #mediaQueryListener
     #scrollBounds
+    #touchState
+    #touchScrolled
     #lastVisibleRange
     constructor() {
         super()
@@ -564,8 +526,8 @@ export class Paginator extends HTMLElement {
             height: 100%;
         }
         #top {
-            --_gap: 2%;
-            --_margin: 0px;
+            --_gap: 7%;
+            --_margin: 48px;
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
             --_max-column-count: 2;
@@ -604,12 +566,12 @@ export class Paginator extends HTMLElement {
             grid-row: 1 / -1;
         }
         #container {
-            grid-column: 2 / 5;
+            /* 横向恒满屏（1 / -1）：容器宽度恒定，避免封面进出窗口时切换网格导致
+               容器宽窄跳变（窄栏 ↔ 满屏）→ 白边 / 全部章节重排刷屏。左右页边距由
+               columnize 内容内边距（四向 pageMargin 的 l/r）处理，不依赖外部窄栏。 */
+            grid-column: 1 / -1;
             grid-row: 2;
             overflow: hidden;
-            /* 多 View 拼接：View element 用绝对定位（Paginator 层），内部布局保持原版。
-               撑宽占位 div 提供滚动宽度。position:relative 作为绝对定位的参照。 */
-            position: relative;
         }
         :host([flow="scrolled"]) #container {
             grid-column: 1 / -1;
@@ -647,7 +609,7 @@ export class Paginator extends HTMLElement {
         <div id="top">
             <div id="background" part="filter"></div>
             <div id="header"></div>
-            <div id="container" part="container"></div>
+            <div id="container"></div>
             <div id="footer"></div>
         </div>
         `
@@ -666,6 +628,16 @@ export class Paginator extends HTMLElement {
                 else this.#afterScroll('scroll')
             }
         }, 250))
+
+        const opts = { passive: false }
+        this.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
+        this.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
+        this.addEventListener('touchend', this.#onTouchEnd.bind(this))
+        this.addEventListener('load', ({ detail: { doc } }) => {
+            doc.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
+            doc.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
+            doc.addEventListener('touchend', this.#onTouchEnd.bind(this))
+        })
 
         this.addEventListener('relocate', ({ detail }) => {
             if (detail.reason === 'selection') setSelectionTo(this.#anchor, 0)
@@ -714,7 +686,7 @@ export class Paginator extends HTMLElement {
 
         this.#mediaQueryListener = () => {
             if (!this.#view) return
-            this.#replaceBackground(this.#view.docBackground, this.columnCount)
+            this.#background.style.background = getBackground(this.#view.document)
         }
         this.#mediaQuery.addEventListener('change', this.#mediaQueryListener)
     }
@@ -728,33 +700,12 @@ export class Paginator extends HTMLElement {
             case 'max-block-size':
             case 'max-column-count':
                 this.#top.style.setProperty('--_' + name, value)
-                this.render()
                 break
             case 'max-inline-size':
                 // needs explicit `render()` as it doesn't necessarily resize
                 this.#top.style.setProperty('--_' + name, value)
                 this.render()
                 break
-        }
-    }
-    /** 宿主注入四向页边距（px，可独立不等）。存为内容内边距（columnize 应用），
-     *  使翻页动画覆盖整屏，边距随正文一起滑动。 */
-    setPageMargins({ top = 0, right = 0, bottom = 0, left = 0 } = {}) {
-        this.#pageMargin = { top, right, bottom, left }
-        this.render()
-    }
-    /** 只要有封面色，就让网格保持整宽，避免用窄栏先渲染封面再拉宽产生的「先白边后消除」闪烁。
-     *  封面被当作普通阅读页套了栏约束，容器比视口窄。直接改写 #top 网格列令
-     *  #container（第 2~4 列）独占整排宽；窗口内无封面时恢复可读窄栏（正文不受影响）。 */
-    #syncCoverGrid() {
-        const hasCover = [...this.#viewMap.values()].some(v => v.isCover)
-        const overridden = this.#top.style.getPropertyValue('grid-template-columns')
-        if (hasCover !== (overridden !== '')) {
-            if (hasCover)
-                this.#top.style.setProperty('grid-template-columns', '0px 0px minmax(0, 1fr) 0px 0px')
-            else
-                this.#top.style.removeProperty('grid-template-columns')
-            void this.#top.offsetWidth // 强制 reflow
         }
     }
     open(book) {
@@ -777,247 +728,32 @@ export class Paginator extends HTMLElement {
                     `break-${x}: ${y ?? ''}column`))
         })
     }
-    /** 是否启用多 View 拼接（仅 LTR 水平分页；竖排/滚动式保持单 View 兼容）。 */
-    get #multi() {
-        return !this.scrolled && !this.#vertical && !this.#rtl
+    /** 宿主注入四向页边距（px，可独立不等）。存为内容内边距（columnize 应用），
+     *  使翻页动画覆盖整屏，边距随正文一起滑动。 */
+    setPageMargins({ top = 0, right = 0, bottom = 0, left = 0 } = {}) {
+        this.#pageMargin = { top, right, bottom, left }
+        this.render()
     }
-    /** 加载章节 View（防重入）。主 View 需 await；邻接可后台加载。 */
-    #loadView(index) {
-        if (this.#viewMap.has(index)) return Promise.resolve(this.#viewMap.get(index))
-        if (this.#loadPromises.has(index)) return this.#loadPromises.get(index)
-        const promise = (async () => {
-            const src = await this.sections[index].load()
-            const view = new View({
-                container: this,
-                onExpand: () => this.#relayoutAfterExpand(),
-            })
-            this.#container.append(view.element)
-            const afterLoad = doc => {
-                // 封面页识别：首页且「以一张大图为主、几乎无正文」→ 取消该页四向边距并置零 body 边距，
-                // 使封面图整屏铺满。追加在 head 末尾（晚于宿主注入的全局阅读样式）以高优先级覆盖。
-                if (index === 0 && isCoverLike(doc)) {
-                    view.isCover = true
-                    const $coverStyle = doc.createElement('style')
-                    $coverStyle.textContent =
-                        'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
-                    doc.head.append($coverStyle)
-                    this.#coverStyleMap.set(doc, $coverStyle)
-                }
-                if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
-                    doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
-                    doc.head.append($style)
-                    this.#styleMap.set(doc, [$styleBefore, $style])
-                }
-                this.setStyles(this.#styles)
-                this.dispatchEvent(new CustomEvent('load', { detail: { doc, index } }))
-            }
-            const beforeRender = this.#beforeRender.bind(this)
-            await view.load(src, afterLoad, beforeRender)
-            this.dispatchEvent(new CustomEvent('create-overlayer', {
-                detail: {
-                    doc: view.document, index,
-                    attach: overlayer => view.overlayer = overlayer,
-                },
-            }))
-            this.#viewMap.set(index, view)
-            // 封面 view 一进窗口就让网格保持整宽，使其从首次布局就用宽栏渲染（消除先白边后拉窄的闪烁）
-            this.#syncCoverGrid()
-            // 重排并补偿主 View 偏移（预读 View 从左侧加入会右移主 View 位置）
-            this.#compensateMain()
-            return view
-        })().finally(() => this.#loadPromises.delete(index))
-        this.#loadPromises.set(index, promise)
-        return promise
-    }
-    /** 维护窗口内 View 的拼接布局与偏移。
-     *  多 View 时，View element 用绝对定位，每个非首个 View 左移 2 屏（负重叠），
-     *  使其左缓冲与前一 View 的右缓冲重叠，内容列无缝相接——View 内部布局完全不动。
-     *  撑宽占位 div 提供滚动宽度（absolute 子项不撑开 scrollWidth）。 */
-    #layoutViews() {
-        const indices = [...this.#viewMap.keys()].sort((a, b) => a - b)
-        const size = this.size
-        const overlap = this.#multi ? size * 2 : 0
-        if (this.#multi) {
-            if (!this.#sizer) {
-                this.#sizer = document.createElement('div')
-                this.#sizer.style.position = 'relative'
-                this.#sizer.style.height = '100%'
-                this.#container.prepend(this.#sizer)
-            }
-            let acc = 0
-            for (let k = 0; k < indices.length; k++) {
-                const el = this.#viewMap.get(indices[k]).element
-                const w = this.#viewWidth(this.#viewMap.get(indices[k]))
-                // 无缝拼接的核心：后一个 view 必须左移 overlap（2 屏），使内容列连续。
-                // left_{i+1} = left_i + w_i − overlap = left_i + pc_i*size，
-                // 即去掉前一个 view 的左右各 1 屏缓冲，让正文页首尾相接。
-                const left = (k === 0 && this.#adjacentIndex(-1) == null) ? acc - this.size
-                    : acc - (k > 0 ? overlap : 0)
-                el.style.position = 'absolute'
-                el.style.top = '0'
-                el.style.left = `${left}px`
-                this.#offsets.set(indices[k], left)
-                acc = left + w
-            }
-            const last = indices[indices.length - 1]
-            this.#totalSize = last != null
-                ? (this.#offsets.get(last) ?? 0)
-                    + this.#viewWidth(this.#viewMap.get(last))
-                : 0
-            this.#sizer.style.width = `${this.#totalSize}px`
-        } else {
-            // 单 View（竖排/滚动式/RTL）：保持原版流式布局
-            if (this.#sizer) {
-                this.#sizer.remove()
-                this.#sizer = null
-            }
-            for (const i of indices) {
-                const el = this.#viewMap.get(i).element
-                el.style.position = ''
-                el.style.left = ''
-                el.style.top = ''
-                this.#offsets.set(i, 0)
-            }
-            this.#totalSize = indices.length
-                ? this.#viewMap.get(indices[0]).element.getBoundingClientRect()[this.sideProp]
-                : 0
+    #createView() {
+        if (this.#view) {
+            this.#view.destroy()
+            this.#container.removeChild(this.#view.element)
         }
-    }
-    /** 重排窗口并保持主 View 位置稳定：以主 View offset 差补偿滚动位置与 scrollBounds 锚点。 */
-    #compensateMain() {
-        const index = this.#index
-        const before = this.#offsets.get(index) ?? 0
-        this.#layoutViews()
-        const after = this.#offsets.get(index) ?? 0
-        const diff = after - before
-        if (diff) {
-            this.containerPosition += diff
-            if (this.#scrollBounds) this.#scrollBounds[0] += diff
-            this.#lastShiftAt = performance.now()
-        }
-    }
-    /** 某 View 布局尺寸变化后，重排窗口并保持主 View 位置稳定（滚动补偿）。 */
-    #relayoutAfterExpand() {
-        this.#compensateMain()
-    }
-    /** 后台预读相邻章节，使窗口保持「前章 + 当前章 + 后章」缓存。 */
-    #preloadAdjacent() {
-        if (!this.#multi) return
-        for (const dir of [-1, 1]) {
-            const idx = this.#adjacentIndex(dir)
-            if (idx != null && !this.#viewMap.has(idx)) {
-                this.#loadView(idx).catch(err =>
-                    console.warn(`[folio] preload section ${idx} failed:`, err))
-            }
-        }
-    }
-    /** 根据当前滚动位置判定主 View；跨章后迁移窗口（卸载过期、滚动补偿、预读新邻接）。
-     *  判定必须精确到「内容区」：View element 前后各含 1 屏空白缓冲列，
-     *  若按元素边界判定会滞后约 2 屏才迁移，导致相邻章来不及预读、翻页翻进空白缓冲页。
-     *  以屏幕中心所在的内容列判定主章，跨章时提前迁移并预读新邻接。 */
-    #syncMainView() {
-        if (!this.#multi) return
-        const pos = this.start + this.size / 2
-        const indices = [...this.#viewMap.keys()].sort((a, b) => a - b)
-        for (const i of indices) {
-            const offset = this.#offsets.get(i) ?? 0
-            const width = this.#viewMap.get(i).element
-                .getBoundingClientRect()[this.sideProp]
-            const contentStart = offset + this.size          // 前导缓冲（1 屏）
-            const contentEnd = offset + width - this.size    // 内容结束（去右缓冲）
-            if (pos >= contentStart && pos < contentEnd) {
-                if (i !== this.#index) this.#shiftWindow(i)
-                return
-            }
-        }
-    }
-    /** 主 View 迁移到 index：卸载窗口外 View（含滚动补偿），预读新邻接。 */
-    #shiftWindow(index) {
-        // 先更新 #index，再基于新主章推导窗口边界（#adjacentIndex 依赖 #index）
-        this.#index = index
-        this.#view = this.#viewMap.get(index) ?? null
-        const wanted = [
-            this.#adjacentIndex(-1),
-            index,
-            this.#adjacentIndex(1),
-        ].filter(x => x != null)
-        const mainBefore = this.#offsets.get(index) ?? 0
-        for (const j of [...this.#viewMap.keys()]) {
-            if (!wanted.includes(j)) {
-                const view = this.#viewMap.get(j)
-                view.destroy()
-                this.#container.removeChild(view.element)
-                this.sections[j]?.unload?.()
-                this.#viewMap.delete(j)
-            }
-        }
-        this.#layoutViews()
-        this.#syncCoverGrid()
-        // 滚动补偿：卸载左侧 View / margin 变化会使主 View 内容左移，
-        // 用主 View 偏移差同步滚动位置与 scrollBounds 锚点，保持视觉连续。
-        const mainAfter = this.#offsets.get(index) ?? 0
-        const diff = mainAfter - mainBefore
-        if (diff) {
-            this.containerPosition += diff
-            if (this.#scrollBounds) this.#scrollBounds[0] += diff
-        }
-        this.#lastShiftAt = performance.now()
-        this.#preloadAdjacent()
-    }
-    /** 确保 index 作为主 View 就绪（含窗口重建与邻接预读）。 */
-    async #ensureWindow(index) {
-        // 主 View 必须就绪（阻塞等待）
-        if (!this.#viewMap.has(index)) await this.#loadView(index)
-        // 先更新 #index 再推导窗口与预读邻接，保证 #adjacentIndex 基于正确的主章节
-        this.#index = index
-        this.#view = this.#viewMap.get(index) ?? null
-        if (this.#multi) this.#preloadAdjacent()
-        const wanted = this.#multi
-            ? [this.#adjacentIndex(-1), index, this.#adjacentIndex(1)].filter(x => x != null)
-            : [index]
-        // 卸载窗口外的 View
-        for (const j of [...this.#viewMap.keys()]) {
-            if (!wanted.includes(j)) {
-                const view = this.#viewMap.get(j)
-                view.destroy()
-                this.#container.removeChild(view.element)
-                this.sections[j]?.unload?.()
-                this.#viewMap.delete(j)
-            }
-        }
-        this.#layoutViews()
-        this.#syncCoverGrid()
-    }
-    #replaceBackground(background, columnCount) {
-        const doc = this.#view?.document
-        if (!doc) return
-        const htmlStyle = doc.defaultView.getComputedStyle(doc.documentElement)
-        const themeBgColor = htmlStyle.getPropertyValue('--theme-bg-color')
-        if (background && themeBgColor) {
-            const parsedBackground = background.split(/\s(?=(?:url|rgb|hsl|#[0-9a-fA-F]{3,6}))/)
-            parsedBackground[0] = themeBgColor
-            background = parsedBackground.join(' ')
-        }
-        if (/cover.*fixed|fixed.*cover/.test(background)) {
-            background = background.replace('cover', 'auto 100%').replace('fixed', '')
-        }
-        this.#background.innerHTML = ''
-        this.#background.style.display = 'grid'
-        this.#background.style.gridTemplateColumns = `repeat(${columnCount}, 1fr)`
-        for (let i = 0; i < columnCount; i++) {
-            const column = document.createElement('div')
-            column.style.background = background
-            column.style.width = '100%'
-            column.style.height = '100%'
-            this.#background.appendChild(column)
-        }
+        this.#view = new View({
+            container: this,
+            onExpand: () => this.#scrollToAnchor(this.#anchor),
+        })
+        this.#container.append(this.#view.element)
+        return this.#view
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
+
+        // set background to `doc` background
+        // this is needed because the iframe does not fill the whole element
+        this.#background.style.background = background
 
         const { width, height } = this.#container.getBoundingClientRect()
         const size = vertical ? height : width
@@ -1026,10 +762,9 @@ export class Paginator extends HTMLElement {
         const maxInlineSize = parseFloat(style.getPropertyValue('--_max-inline-size'))
         const maxColumnCount = parseInt(style.getPropertyValue('--_max-column-count-spread'))
         const margin = parseFloat(style.getPropertyValue('--_margin'))
-        // 四向独立页边距：内容内边距（columnize 应用）。图片最大尺寸按上下边距之和留空，避免被边距遮挡。
+        this.#margin = margin
+        // 四向独立页边距：随 layout 一起传给 View，供 columnize 写每页内容内边距。
         const pb = this.#pageMargin
-        this.#margin = Math.max(margin, ((pb?.top ?? 0) + (pb?.bottom ?? 0)) / 2)
-        // 四向页边距随 layout 一起传给 View，供 columnize 写每页内容内边距。
 
         const g = parseFloat(style.getPropertyValue('--_gap')) / 100
         // The gap will be a percentage of the #container, not the whole view.
@@ -1067,13 +802,8 @@ export class Paginator extends HTMLElement {
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
-        const columnWidth = vertical ? (size / divisor - margin) : (size / divisor - gap)
+        const columnWidth = (size / divisor) - gap
         this.setAttribute('dir', rtl ? 'rtl' : 'ltr')
-
-        // set background to `doc` background
-        // this is needed because the iframe does not fill the whole element
-        this.columnCount = divisor
-        this.#replaceBackground(background, this.columnCount)
 
         const marginalDivisor = vertical
             ? Math.min(2, Math.ceil(width / maxInlineSize))
@@ -1095,21 +825,11 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth, pageMargin: pb }
     }
     render() {
-        if (!this.#viewMap.size) return
-        const layout = this.#beforeRender({
+        if (!this.#view) return
+        this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
-        })
-        const mainBefore = this.#offsets.get(this.#index) ?? 0
-        for (const view of this.#viewMap.values()) view.render(layout)
-        this.#layoutViews()
-        // 渲染/重排后保持主 View 位置稳定（补偿因邻接尺寸变化引起的偏移漂移）
-        const mainAfter = this.#offsets.get(this.#index) ?? 0
-        const diff = mainAfter - mainBefore
-        if (diff) {
-            this.containerPosition += diff
-            if (this.#scrollBounds) this.#scrollBounds[0] += diff
-        }
+        }))
         this.#scrollToAnchor(this.#anchor)
     }
     get scrolled() {
@@ -1129,7 +849,7 @@ export class Paginator extends HTMLElement {
         return this.#container.getBoundingClientRect()[this.sideProp]
     }
     get viewSize() {
-        return this.#totalSize
+        return this.#view.element.getBoundingClientRect()[this.sideProp]
     }
     get start() {
         return Math.abs(this.#container[this.scrollProp])
@@ -1143,43 +863,77 @@ export class Paginator extends HTMLElement {
     get pages() {
         return Math.round(this.viewSize / this.size)
     }
-    // this is the current position of the container
-    get containerPosition() {
-        return this.#container[this.scrollProp]
-    }
-
-    // this is the new position of the containr
-    set containerPosition(newVal) {
-        this.#container[this.scrollProp] = newVal
-    }
-
     scrollBy(dx, dy) {
         const delta = this.#vertical ? dy : dx
+        const element = this.#container
+        const { scrollProp } = this
         const [offset, a, b] = this.#scrollBounds
         const rtl = this.#rtl
         const min = rtl ? offset - b : offset - a
         const max = rtl ? offset + a : offset + b
-        this.containerPosition = Math.max(min, Math.min(max,
-            this.containerPosition + delta))
+        element[scrollProp] = Math.max(min, Math.min(max,
+            element[scrollProp] + delta))
     }
+    snap(vx, vy) {
+        const velocity = this.#vertical ? vy : vx
+        const [offset, a, b] = this.#scrollBounds
+        const { start, end, pages, size } = this
+        const min = Math.abs(offset) - a
+        const max = Math.abs(offset) + b
+        const d = velocity * (this.#rtl ? -size : size)
+        const page = Math.floor(
+            Math.max(min, Math.min(max, (start + end) / 2
+                + (isNaN(d) ? 0 : d))) / size)
 
-    async snap(vx, vy) {
-        // 单一阈值设计：snap 只负责「回弹到手势起点那一页」，不做方向/半页判定；
-        // 方向翻页（前/后）由 reader 按固定阈值走 next()/prev()。消除与阈值重复的多处半页判据。
-        await this.#settleWindow()
-        const rest0 = this.#scrollBounds?.[0] ?? this.start
-        return this.#scrollToPage(this.#clampPage(Math.round(rest0 / this.size)), 'snap')
+        this.#scrollToPage(page, 'snap').then(() => {
+            const dir = page <= 0 ? -1 : page >= pages - 1 ? 1 : null
+            if (dir) return this.#goTo({
+                index: this.#adjacentIndex(dir),
+                anchor: dir < 0 ? () => 1 : () => 0,
+            })
+        })
     }
-    /** snap 输出目标页号的第二层边界保险：夹紧到有效内容页 [firstContentPage, lastContentPage]。
-     *  B 模型只做纯算术 target=round(rest0/size)+dir，已移除 A 模型自带的末端归一化兜底；
-     *  若 lastContentPage 因 CSS‑Columns 测量有偏差（小数、或偏小导致整数 target 越界），
-     *  动画会朝越界页号插值、内核钳位后停在两页中间。这里在 snap 输出前先把页号锁死到合法整数页。
-     *  仅作保险，不修 lastContentPage 测量源本身。 */
-    #clampPage(page) {
-        const lo = Math.ceil(this.#firstContentPage)
-        const hi = Math.floor(this.#lastContentPage)
-        if (hi < lo) return lo
-        return Math.max(lo, Math.min(page, hi))
+    #onTouchStart(e) {
+        const touch = e.changedTouches[0]
+        this.#touchState = {
+            x: touch?.screenX, y: touch?.screenY,
+            t: e.timeStamp,
+            vx: 0, xy: 0,
+        }
+    }
+    #onTouchMove(e) {
+        const state = this.#touchState
+        if (state.pinched) return
+        state.pinched = globalThis.visualViewport.scale > 1
+        if (this.scrolled || state.pinched) return
+        if (e.touches.length > 1) {
+            if (this.#touchScrolled) e.preventDefault()
+            return
+        }
+        e.preventDefault()
+        const touch = e.changedTouches[0]
+        const x = touch.screenX, y = touch.screenY
+        const dx = state.x - x, dy = state.y - y
+        const dt = e.timeStamp - state.t
+        state.x = x
+        state.y = y
+        state.t = e.timeStamp
+        state.vx = dx / dt
+        state.vy = dy / dt
+        this.#touchScrolled = true
+        this.scrollBy(dx, dy)
+    }
+    #onTouchEnd() {
+        this.#touchScrolled = false
+        if (this.scrolled) return
+
+        // XXX: Firefox seems to report scale as 1... sometimes...?
+        // at this point I'm basically throwing `requestAnimationFrame` at
+        // anything that doesn't work
+        requestAnimationFrame(() => {
+            if (globalThis.visualViewport.scale === 1)
+                this.snap(this.#touchState.vx, this.#touchState.vy)
+        })
     }
     // allows one to process rects as if they were LTR and horizontal
     #getRectMapper() {
@@ -1200,32 +954,17 @@ export class Paginator extends HTMLElement {
                 : f => f
     }
     async #scrollToRect(rect, reason) {
-        const main = this.#viewMap.get(this.#index)
-        if (!main) return
-        const mainOffset = this.#offsets.get(this.#index) ?? 0
         if (this.scrolled) {
-            const offset = mainOffset + this.#getRectMapper()(rect).left - this.#margin
+            const offset = this.#getRectMapper()(rect).left - this.#margin
             return this.#scrollTo(offset, reason)
         }
-        if (this.#rtl) {
-            // 负向滚动坐标系（多 View 拼接仅在 LTR，此处保持单 View 语义）
-            const offset = this.#getRectMapper()(rect).left
-            return this.#scrollToPage(Math.floor(offset / this.size) - 1, reason)
-        }
-        // 让锚点吸附到其所在列的起点（列序号 = floor((docX - 左边距)/size)），
-        // 使正文距屏幕左缘正好保留左边距（与翻页页定位一致）。
-        // 直接对齐文本精确位置会把「已含左内边距的 rect.left」当屏幕基准，
-        // 令文本贴到屏幕左缘，左边距被吃掉（首屏偏左）。
-        const mapper = this.#getRectMapper()
-        const docX = mapper(rect).left
-        const l = this.#pageMargin?.left ?? 0
-        const col = Math.max(0, Math.floor((docX - l) / this.size))
-        const offset = mainOffset + this.size + col * this.size
-        return this.#scrollToPage(offset / this.size, reason)
+        const offset = this.#getRectMapper()(rect).left
+        return this.#scrollToPage(Math.floor(offset / this.size) + (this.#rtl ? -1 : 1), reason)
     }
     async #scrollTo(offset, reason, smooth) {
-        const { size } = this
-        if (this.containerPosition === offset) {
+        const element = this.#container
+        const { scrollProp, size } = this
+        if (element[scrollProp] === offset) {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
             return
@@ -1233,26 +972,20 @@ export class Paginator extends HTMLElement {
         // FIXME: vertical-rl only, not -lr
         if (this.scrolled && this.#vertical) offset = -offset
         if ((reason === 'snap' || smooth) && this.hasAttribute('animated')) return animate(
-            this.containerPosition, offset, 300, easeOutQuad,
-            x => this.containerPosition = x,
+            element[scrollProp], offset, 300, easeOutQuad,
+            x => element[scrollProp] = x,
         ).then(() => {
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         })
         else {
-            this.containerPosition = offset
+            element[scrollProp] = offset
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         }
     }
     async #scrollToPage(page, reason, smooth) {
-        let offset = this.size * (this.#rtl ? -page : page)
-        // 把落点钳制到真实内容页范围 [第一内容页, 末内容页]：
-        // #pages/atEnd 会把末章右侧的空白缓冲也算作页面，导致大幅滑动一次翻到末尾时
-        // 落在末页起点附近、停在两页之间。此处直接按内容边界收敛，杜绝翻过头/停半屏。
-        if (!this.scrolled && !this.#rtl && this.#multi)
-            offset = Math.max(this.#firstContentPage * this.size,
-                Math.min(offset, this.#lastContentPage * this.size))
+        const offset = this.size * (this.#rtl ? -page : page)
         return this.#scrollTo(offset, reason, smooth)
     }
     async scrollToAnchor(anchor, select) {
@@ -1260,13 +993,6 @@ export class Paginator extends HTMLElement {
     }
     async #scrollToAnchor(anchor, reason = 'anchor') {
         this.#anchor = anchor
-        const main = this.#viewMap.get(this.#index)
-        // 过期锚点保护：锚点若属于已迁移走的章节文档，用它定位会误跳到错误位置，直接忽略。
-        // （仅当锚点是 Range/Element 时检查；数字 fraction 锚点恒相对于主 View，无需检查。）
-        if (main && (anchor?.startContainer || anchor?.nodeType === 1)) {
-            const ownerDoc = anchor.startContainer?.ownerDocument ?? anchor.ownerDocument
-            if (ownerDoc && ownerDoc !== main.document) return
-        }
         const rects = uncollapse(anchor)?.getClientRects?.()
         // if anchor is an element or a range
         if (rects) {
@@ -1278,49 +1004,25 @@ export class Paginator extends HTMLElement {
             await this.#scrollToRect(rect, reason)
             return
         }
-        // if anchor is a fraction（相对主 View 的章节内进度）
-        if (!main) return
-        const mainOffset = this.#offsets.get(this.#index) ?? 0
+        // if anchor is a fraction
         if (this.scrolled) {
-            const mainSize = main.element.getBoundingClientRect()[this.sideProp]
-            await this.#scrollTo(mainOffset + anchor * mainSize, reason)
+            await this.#scrollTo(anchor * this.viewSize, reason)
             return
         }
-        const textPages = main.pageCount
-        if (textPages < 1) return
+        const { pages } = this
+        if (!pages) return
+        const textPages = pages - 2
         const newPage = Math.round(anchor * (textPages - 1))
-        const contentStartPage = (mainOffset + this.size) / this.size
-        await this.#scrollToPage(contentStartPage + newPage, reason)
+        await this.#scrollToPage(newPage + 1, reason)
     }
     #getVisibleRange() {
-        const main = this.#viewMap.get(this.#index)
-        if (!main) return
-        const mainOffset = this.#offsets.get(this.#index) ?? 0
-        if (this.scrolled) return getVisibleRange(main.document,
-            this.start - mainOffset + this.#margin,
-            this.end - mainOffset - this.#margin, this.#getRectMapper())
-        if (this.#rtl) {
-            // 负向滚动坐标系（单 View）
-            const size = -this.size
-            return getVisibleRange(main.document,
-                this.start - size, this.end - size, this.#getRectMapper())
-        }
-        // 主 View 内容坐标 = 全局坐标 - mainOffset - 前导缓冲（1 屏）
-        const lead = this.size
-        return getVisibleRange(main.document,
-            this.start - mainOffset - lead,
-            this.end - mainOffset - lead, this.#getRectMapper())
+        if (this.scrolled) return getVisibleRange(this.#view.document,
+            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
+        const size = this.#rtl ? -this.size : this.size
+        return getVisibleRange(this.#view.document,
+            this.start - size, this.end - size, this.#getRectMapper())
     }
     #afterScroll(reason) {
-        // 跨章后先迁移主 View（卸载过期 View、滚动补偿、预读新邻接）。
-        // 窗口迁移/补偿本身会触发 scroll 事件，短时间内（400ms）抑制，
-        // 避免「迁移 → 补偿 → 再 sync → 再迁移」的震荡循环。
-        if (performance.now() - this.#lastShiftAt > 400)
-            this.#syncMainView()
-        // 迁移/补偿可能改变了滚动位置，刷新吸附边界（scrollBounds），
-        // 保证下一次 snap 的 min/max 基于最新的实际位置而非迁移前的偏移。
-        const { size } = this
-        this.#scrollBounds = [this.containerPosition, this.atStart ? 0 : size, this.atEnd ? 0 : size]
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
@@ -1330,43 +1032,74 @@ export class Paginator extends HTMLElement {
 
         const index = this.#index
         const detail = { reason, range, index }
-        const main = this.#viewMap.get(index)
-        const mainOffset = this.#offsets.get(index) ?? 0
-        if (this.scrolled) {
-            const mainSize = main?.element.getBoundingClientRect()[this.sideProp] ?? 1
-            detail.fraction = (this.start - mainOffset) / mainSize
-        } else if (this.pages > 0 && main) {
-            const textPages = main.pageCount
-            if (textPages > 1) {
-                // 主 View 内内容页序号（0-based，不含缓冲列）：首页为 0 → 隐藏 header
-                const lead = this.size
-                const mainPage = Math.floor(
-                    ((this.start + this.end) / 2 - mainOffset - lead) / this.size)
-                const contentPage = Math.max(0, Math.min(textPages - 1, mainPage))
-                this.#header.style.visibility = contentPage > 0 ? 'visible' : 'hidden'
-                detail.fraction = contentPage / (textPages - 1)
-                detail.size = 1 / (textPages - 1)
-            } else {
-                // 字体/布局尚未稳定（pageCount 未就绪）：进度归 0，避免 NaN
-                detail.fraction = 0
-                detail.size = 0
-            }
+        if (this.scrolled) detail.fraction = this.start / this.viewSize
+        else if (this.pages > 0) {
+            const { page, pages } = this
+            this.#header.style.visibility = page > 1 ? 'visible' : 'hidden'
+            detail.fraction = (page - 1) / (pages - 2)
+            detail.size = 1 / (pages - 2)
         }
         this.dispatchEvent(new CustomEvent('relocate', { detail }))
+    }
+    async #display(promise) {
+        const { index, src, anchor, onLoad, select } = await promise
+        this.#index = index
+        const hasFocus = this.#view?.document?.hasFocus()
+        if (src) {
+            const view = this.#createView()
+            const afterLoad = doc => {
+                // 封面页识别：首页且「以一张大图为主、几乎无正文」→ 取消该页四向边距并置零 body 边距，
+                // 使封面图整屏铺满。追加在 head 末尾（晚于宿主注入的全局阅读样式）以高优先级覆盖。
+                if (index === 0 && isCoverLike(doc)) {
+                    view.isCover = true
+                    const $coverStyle = doc.createElement('style')
+                    $coverStyle.textContent =
+                        'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
+                    doc.head.append($coverStyle)
+                }
+                if (doc.head) {
+                    const $styleBefore = doc.createElement('style')
+                    doc.head.prepend($styleBefore)
+                    const $style = doc.createElement('style')
+                    doc.head.append($style)
+                    this.#styleMap.set(doc, [$styleBefore, $style])
+                }
+                onLoad?.({ doc, index })
+            }
+            const beforeRender = this.#beforeRender.bind(this)
+            await view.load(src, afterLoad, beforeRender)
+            this.dispatchEvent(new CustomEvent('create-overlayer', {
+                detail: {
+                    doc: view.document, index,
+                    attach: overlayer => view.overlayer = overlayer,
+                },
+            }))
+            this.#view = view
+        }
+        await this.scrollToAnchor((typeof anchor === 'function'
+            ? anchor(this.#view.document) : anchor) ?? 0, select)
+        if (hasFocus) this.focusView()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
     }
-    async #goTo({ index, anchor, select }) {
-        if (!this.#canGoToIndex(index)) return
-        // 确保 index 作为主 View 就绪：若已在窗口（相邻章已预读）则无需重载，
-        // 直接定位；否则重建窗口（加载主 View + 预读邻接 + 卸载过期）。
-        await this.#ensureWindow(index)
-        const main = this.#viewMap.get(index)
-        const hasFocus = main?.document?.hasFocus()
-        await this.scrollToAnchor((typeof anchor === 'function'
-            ? anchor(main?.document) : anchor) ?? 0, select)
-        if (hasFocus) this.focusView()
+    async #goTo({ index, anchor, select}) {
+        if (index === this.#index) await this.#display({ index, anchor, select })
+        else {
+            const oldIndex = this.#index
+            const onLoad = detail => {
+                this.sections[oldIndex]?.unload?.()
+                this.setStyles(this.#styles)
+                this.dispatchEvent(new CustomEvent('load', { detail }))
+            }
+            await this.#display(Promise.resolve(this.sections[index].load())
+                .then(src => ({ index, src, anchor, onLoad, select }))
+                .catch(e => {
+                    console.warn(e)
+                    console.warn(new Error(`Failed to load section ${index}`))
+                    return {}
+                }))
+        }
     }
     async goTo(target) {
         if (this.#locked) return
@@ -1378,157 +1111,37 @@ export class Paginator extends HTMLElement {
         if (this.scrolled) {
             if (this.start > 0) return this.#scrollTo(
                 Math.max(0, this.start - (distance ?? this.size)), null, true)
-            return !this.atStart
+            return true
         }
-        // 列感知回翻：目标 = 当前可视列的前一列真实绝对起点。
-        // 拼接模型里"全局整数页号 × size"并不等于真实内容列，用整数页号会在跨章时落点失准；
-        // 改按当前章真实列起点 -size 踏步。
-        const restPrev = this.#scrollBounds?.[0] ?? this.start
-        const mainPrev = this.#viewMap.get(this.#index)
-        const mainOffPrev = this.#offsets.get(this.#index) ?? 0
-        const nPrev = Math.round((restPrev - mainOffPrev - this.size) / this.size) // 当前可视列（章内）
-        const prevColStart = mainOffPrev + this.size + (nPrev - 1) * this.size
-        const mainContentStart = mainOffPrev + this.size // 当前章第一列起点
-        if (prevColStart >= mainContentStart)
-            return this.#scrollTo(prevColStart, 'scroll', true).then(() => false)
-        // 越过当前章首 → 回翻跨章：滚到上一章最后一列，发起时即切主章。
-        const prev = this.#adjacentIndex(-1)
-        if (prev != null) {
-            const poff = this.#offsets.get(prev)
-            if (poff != null) {
-                this.#view = this.#viewMap.get(prev)
-                this.#index = prev
-                return this.#scrollTo(
-                    poff + this.#viewWidth(this.#viewMap.get(prev)) - this.size * 2,
-                    'scroll', true).then(() => false)
-            }
-            // 上一章尚未就绪：同步等待加载完成，再带动画滚入其末尾（避免瞬切）。
-            return (async () => {
-                await this.#loadView(prev)
-                const off2 = this.#offsets.get(prev)
-                if (off2 == null) return true
-                this.#view = this.#viewMap.get(prev)
-                this.#index = prev
-                await this.#scrollTo(
-                    off2 + this.#viewWidth(this.#viewMap.get(prev)) - this.size * 2,
-                    'scroll', true)
-                return false
-            })()
-        }
-        // 上一章未就绪：回退由 #turnPage 触发 goTo 加载。
-        if (prev == null)
-            return this.#scrollTo(mainContentStart, 'scroll', true).then(() => false)
-        return true
+        if (this.atStart) return
+        const page = this.page - 1
+        return this.#scrollToPage(page, 'page', true).then(() => page <= 0)
     }
     #scrollNext(distance) {
         if (!this.#view) return true
         if (this.scrolled) {
             if (this.viewSize - this.end > 2) return this.#scrollTo(
                 Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
-            return !this.atEnd
+            return true
         }
-        // 列感知推进：目标 = 当前可视列的下一列真实绝对起点。
-        // 拼接模型里"全局整数页号 × size"并不等于真实内容列（每章长度非 size 整数倍、含缓冲列），
-        // 用整数页号会在跨章时落点时准时不准（"某些章跳"）；改按当前章真实列起点 +size 踏步。
-        const restNext = this.#scrollBounds?.[0] ?? this.start
-        const mainNext = this.#viewMap.get(this.#index)
-        const mainOffNext = this.#offsets.get(this.#index) ?? 0
-        const nNext = Math.round((restNext - mainOffNext - this.size) / this.size) // 当前可视列（章内）
-        const nextColStart = mainOffNext + this.size + (nNext + 1) * this.size
-        const mainContentEnd = mainOffNext + this.#viewWidth(mainNext) - this.size * 2 // 当前章最后一列起点
-        if (nextColStart <= mainContentEnd)
-            return this.#scrollTo(nextColStart, 'scroll', true).then(() => false)
-        // 越过当前章末 → 前进跨章：滚到下一章第一列，发起时即切主章，
-        // 落定后 #syncMainView 判定一致，不再 MIGRATE 卸载重排 / 平移滚动条。
-        const next = this.#adjacentIndex(1)
-        if (next != null) {
-            const noff = this.#offsets.get(next)
-            if (noff != null) {
-                this.#view = this.#viewMap.get(next)
-                this.#index = next
-                return this.#scrollTo(noff + this.size, 'scroll', true).then(() => false)
-            }
-            // 下一章尚未就绪：同步等待加载完成，再带动画滚入其开头；
-            // 避免回退 #turnPage → #goTo → #scrollToAnchor 的瞬切（"动画被偷走"）。
-            return (async () => {
-                await this.#loadView(next)
-                const off2 = this.#offsets.get(next)
-                if (off2 == null) return true
-                this.#view = this.#viewMap.get(next)
-                this.#index = next
-                await this.#scrollTo(off2 + this.size, 'scroll', true)
-                return false
-            })()
-        }
-        // 下一章未就绪：回退由 #turnPage 触发 goTo 加载。
-        if (next == null)
-            return this.#scrollTo(mainContentEnd, 'scroll', true).then(() => false)
-        return true
+        if (this.atEnd) return
+        const page = this.page + 1
+        const pages = this.pages
+        return this.#scrollToPage(page, 'page', true).then(() => page >= pages - 1)
     }
     get atStart() {
         return this.#adjacentIndex(-1) == null && this.page <= 1
     }
     get atEnd() {
-        return this.#adjacentIndex(1) == null && this.page >= this.#lastContentPage
-    }
-    /** 取 View element 的参与宽度：未排版时为 0，钳位到最小单元（3 屏）。 */
-    #viewWidth(view) {
-        const size = this.size
-        // 用派生值（列数×屏宽+两屏缓冲）算宽度，而非实测 getBoundingClientRect：
-        // 实测值易受瞬时/亚像素污染，累积到末章就让 #lastContentPage 偏成小数 → 末页后冒空白页/半页错位。
-        // 每个 view 元素宽度 = 内容列(pc) + 前导/尾随各 1 屏缓冲。
-        const pc = Math.max(view.pageCount || 1, 1)
-        return Math.max(pc * size + size * 2, size * 3)
-    }
-    /** 窗口内第一个可读内容页（全局页号，可为小数）。
-     *  窗口滑动后第一章可能已被卸载，其左侧 1 屏空白缓冲列不可停留、也无正文可读。
-     *  返回首个在窗章节的正文起始页（offset + 前导缓冲 1 屏）。 */
-    get #firstContentPage() {
-        const indices = [...this.#viewMap.keys()].sort((a, b) => a - b)
-        const firstIndex = indices[0]
-        if (firstIndex == null) return 0
-        const firstOffset = this.#offsets.get(firstIndex) ?? 0
-        return (firstOffset + this.size) / this.size
-    }
-    /** 窗口内最后一个可读内容页（全局页号，可为小数）；末章右侧 1 屏空白缓冲列不可停留。
-     *  计算：末章内容结束（offset + elementWidth - size）再减一屏 = 可滚到的最大内容位置。 */
-    get #lastContentPage() {
-        const indices = [...this.#viewMap.keys()].sort((a, b) => a - b)
-        const lastIndex = indices[indices.length - 1]
-        if (lastIndex == null) return 0
-        const lastOffset = this.#offsets.get(lastIndex) ?? 0
-        const lastWidth = this.#viewWidth(this.#viewMap.get(lastIndex))
-        return (lastOffset + lastWidth - this.size * 2) / this.size
+        return this.#adjacentIndex(1) == null && this.page >= this.pages - 2
     }
     #adjacentIndex(dir) {
         for (let index = this.#index + dir; this.#canGoToIndex(index); index += dir)
             if (this.sections[index]?.linear !== 'no') return index
     }
-    /** 翻页前稳定窗口：等待在途预读完成，并等已在窗章节的字体/重排稳定。
-     *  若某相邻章节在翻页动画中途才因字体加载/观察器回调而变更列宽与页数，
-     *  onExpand透传的 #compensateMain 会移动容器位置，与进行中的动画帧竞争：
-     *  动画帧最后写入的 target*size 在（已变化的）新偏移体系下映射到错误内容，
-     *  表现为"动画正确但落点错页 / 翻两页跳回章节开头"。
-     *  这里先在动画开始前收敛全部偏移（等字体两帧稳定后 #compensateMain），
-     *  保证 target*size 与正文映射一致。超时兜底：加载/排版慢时最多等 timeout 毫秒避免阻塞翻页。 */
-    async #settleWindow(timeout = 500) {
-        const pending = [...this.#loadPromises.values()]
-        if (pending.length)
-            await Promise.race([Promise.allSettled(pending), wait(timeout)])
-        // 等待窗口内各章节字体稳定并触发其 aR 兜底 expand（columnize 后若字体未就绪，
-        // 列宽可能尚未收窄到位，页数不准确；等两帧确保 View.expand 的 onExpand → 补偿已执行）。
-        const fonts = [...this.#viewMap.values()]
-            .map(v => v.document?.fonts?.ready
-                .then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))
-                ?? Promise.resolve())
-        if (fonts.length)
-            await Promise.race([Promise.allSettled(fonts), wait(timeout)])
-        this.#compensateMain()
-    }
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
-        await this.#settleWindow()
         const prev = dir === -1
         const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
         if (shouldGo) await this.#goTo({
@@ -1538,11 +1151,11 @@ export class Paginator extends HTMLElement {
         if (shouldGo || !this.hasAttribute('animated')) await wait(100)
         this.#locked = false
     }
-    async prev(distance) {
-        return await this.#turnPage(-1, distance)
+    prev(distance) {
+        return this.#turnPage(-1, distance)
     }
-    async next(distance) {
-        return await this.#turnPage(1, distance)
+    next(distance) {
+        return this.#turnPage(1, distance)
     }
     prevSection() {
         return this.goTo({ index: this.#adjacentIndex(-1) })
@@ -1559,49 +1172,39 @@ export class Paginator extends HTMLElement {
         return this.goTo({ index })
     }
     getContents() {
-        return [...this.#viewMap].map(([index, view]) => ({
-            index,
-            overlayer: view.overlayer,
-            doc: view.document,
-        }))
+        if (this.#view) return [{
+            index: this.#index,
+            overlayer: this.#view.overlayer,
+            doc: this.#view.document,
+        }]
+        return []
     }
     setStyles(styles) {
         this.#styles = styles
-        // 应用到窗口内所有已加载章节（主 View 与预读邻接）
-        for (const [doc, $$styles] of this.#styleMap) {
-            const [$beforeStyle, $style] = $$styles
-            if (Array.isArray(styles)) {
-                const [beforeStyle, style] = styles
-                $beforeStyle.textContent = beforeStyle
-                $style.textContent = style
-            } else $style.textContent = styles
-        }
+        const $$styles = this.#styleMap.get(this.#view?.document)
+        if (!$$styles) return
+        const [$beforeStyle, $style] = $$styles
+        if (Array.isArray(styles)) {
+            const [beforeStyle, style] = styles
+            $beforeStyle.textContent = beforeStyle
+            $style.textContent = style
+        } else $style.textContent = styles
 
         // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() => {
-            this.#replaceBackground(this.#view?.docBackground, this.columnCount)
-        })
+        requestAnimationFrame(() =>
+            this.#background.style.background = getBackground(this.#view.document))
 
         // needed because the resize observer doesn't work in Firefox
-        for (const view of this.#viewMap.values())
-            view.document?.fonts?.ready?.then(() => view.expand())
+        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
     }
     focusView() {
-        this.#view?.document?.defaultView?.focus()
+        this.#view.document.defaultView.focus()
     }
     destroy() {
         this.#observer.unobserve(this)
-        for (const [index, view] of this.#viewMap) {
-            view.destroy()
-            this.sections[index]?.unload?.()
-        }
-        this.#viewMap.clear()
-        if (this.#sizer) {
-            this.#sizer.remove()
-            this.#sizer = null
-        }
-        this.#styleMap.clear()
+        this.#view.destroy()
         this.#view = null
+        this.sections[this.#index]?.unload?.()
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
     }
 }

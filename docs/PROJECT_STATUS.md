@@ -8,6 +8,23 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
+## 近期重构 · 换回官方 foliate-js 作新基座（去拼接污染）
+
+> 由于自研"多窗口拼接 + scrollLeft 补偿"是失败的产物（跨章乱跳、offset 重排、clamp），把 foliate-js 换回**官方原版 johnfactotum/foliate-js**，作为新的干净重构起点。重新迁移回两个我们真正需要的定制：**四向独立页边距**、**封面全屏**。其余（拼接待滑窗/scrollLeft 动画）一律不再引入。
+
+- **基座来源**：官方 GitHub `johnfactotum/foliate-js`（本地 `/tmp/foliate-origin` 克隆）；替换 assets/foliate-js 下的通用文件（view.js/epub.js/overlayer.js 等升到官方最新），paginator.js 用官方版做手工迁移。
+- **迁移的定制①·四向独立边距**：`View.columnize` 改为接收 `pageMargin(top/right/bottom/left)`，水平模式 `column-width=size-l-r`、`column-gap=r+l`、horizontal padding=t/b 每页生效；`Paginator.setPageMargins()` + `#beforeRender` 传 `pageMargin`。
+- **迁移的定制②·封面全屏**：`isCoverLike(doc)` 识别首页大图章 → `view.isCover=true` + 注入 `html,body,body>*{margin/padding:0;height:100%}`；`setImageSize` 用 `effMargin=isCover?0` + svg 改 viewBox 撑满整页。
+
+### 备查 · 封面全屏 24px 白边解法（核心定制，勿再丢失）
+
+- **现象**：翻到封面整屏时，左右/四周出现约 24px 白边。
+- **根因**：foliate 默认 `#container { grid-column: 2/5 }` 被四周 `--_half-gap` 轨道压成**窄栏**（内容宽 < 满屏），封面被套了栏约束 → 四周露白。
+- **解法（必须随每次升级保留）**：把 `#container` 改为 **`grid-column: 1/-1; grid-row: 2`**（横向恒满屏）。左右页边距不再依赖外部窄栏，改由 `columnize` 内容内边距（四向 `pageMargin` 的 l/r）处理。这样容器宽度恒定，封面无白边，正文边距靠内部 padding。
+- 若再次替换 foliate-js，务必把此 `#container` 网格定制与新迁移的四向边距一起保留，否则封面白边复现。
+
+---
+
 ## 近期决策 · 阅读渲染内核重构（章节长条驻留模型）
 
 > 跨章翻页「乱跳 / 大半屏弹回 / 连翻两页」多次修补未根除，定位为**三窗口拼接 + 滚动补偿**路线本身的结构性缺陷（offsets 重排与 scrollLeft 天然不同步、章节宽度异步变化、多回调互踩）。经讨论确定整体重构方向，**作为实现基准**，详录于 [`READER_ENGINE.md`](READER_ENGINE.md)。

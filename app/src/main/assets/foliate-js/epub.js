@@ -94,9 +94,7 @@ const childGetter = (doc, ns) => {
 
 const resolveURL = (url, relativeTo) => {
     try {
-        // replace %2c in the url with a comma, this might be introduced by calibre
-        url = url.replace(/%2c/, ',')
-        if (relativeTo.includes(':') && !relativeTo.startsWith('OEBPS')) return new URL(url, relativeTo)
+        if (relativeTo.includes(':')) return new URL(url, relativeTo)
         // the base needs to be a valid URL, so set a base URL and then remove it
         const root = 'https://invalid.invalid/'
         const obj = new URL(url, root + relativeTo)
@@ -205,7 +203,7 @@ const getMetadata = opf => {
         if (!els) return null
         return Object.groupBy(els.map(parse), x => x.property)
     }
-    const dc = Object.fromEntries(Object.entries(Object.groupBy(els.dc || [], el => el.localName))
+    const dc = Object.fromEntries(Object.entries(Object.groupBy(els.dc, el => el.localName))
         .map(([name, els]) => [name, els.map(parse)]))
     const properties = getProperties() ?? {}
     const legacyMeta = Object.fromEntries(els.legacyMeta?.map(el =>
@@ -269,7 +267,7 @@ const getMetadata = opf => {
         subtitle: dc.title?.find(x => prop(x, 'title-type') === 'subtitle')?.value,
         language: dc.language?.map(x => x.value),
         description: one(dc.description),
-        publisher: makeContributor(dc.publisher?.[0]),
+        publisher: dc.publisher?.map(makeContributor),
         published: dc.date?.find(x => x.attrs.event === 'publication')?.value
             ?? one(dc.date),
         modified: one(properties[PREFIX.dcterms + 'modified'])
@@ -286,6 +284,7 @@ const getMetadata = opf => {
         altIdentifier: dc.identifier?.map(makeAltIdentifier),
         source: dc.source?.map(makeAltIdentifier), // NOTE: not in webpub schema
         rights: one(dc.rights), // NOTE: not in webpub schema
+        pageBreakSource: one(properties['pageBreakSource']), // NOTE: not in webpub schema
     }
     const remapContributor = defaultKey => x => {
         const keys = new Set(x.role?.map(role => RELATORS[role] ?? defaultKey))
@@ -647,6 +646,7 @@ class Resources {
                 item.properties = item.properties?.split(/\s/)
                 return item
             })
+        this.manifestById = new Map(this.manifest.map(item => [item.id, item]))
         this.spine = $$itemref
             .map(getAttributes('idref', 'id', 'linear', 'properties'))
             .map(item => (item.properties = item.properties?.split(/\s/), item))
@@ -671,15 +671,13 @@ class Resources {
             ?? this.getItemByID($$$(opf, 'meta')
                 .find(filterAttribute('name', 'cover'))
                 ?.getAttribute('content'))
-            ?? this.manifest.find(item => item.href.includes('cover')
-                && item.mediaType.startsWith('image'))
             ?? this.getItemByHref(this.guide
                 ?.find(ref => ref.type.includes('cover'))?.href)
 
         this.cfis = CFI.fromElements($$itemref)
     }
     getItemByID(id) {
-        return this.manifest.find(item => item.id === id)
+        return this.manifestById.get(id)
     }
     getItemByHref(href) {
         return this.manifest.find(item => item.href === href)
@@ -709,7 +707,6 @@ class Loader {
     #cache = new Map()
     #children = new Map()
     #refCount = new Map()
-    allowScript = false
     eventTarget = new EventTarget()
     constructor({ loadText, loadBlob, resources }) {
         this.loadText = loadText
@@ -768,7 +765,11 @@ class Loader {
         const { href, mediaType } = item
 
         const isScript = MIME.JS.test(item.mediaType)
-        if (isScript && !this.allowScript) return null
+        const detail = { type: mediaType, isScript, allow: true}
+        const event = new CustomEvent('load', { detail })
+        this.eventTarget.dispatchEvent(event)
+        const allow = await event.detail.allow
+        if (!allow) return null
 
         const parent = parents.at(-1)
         if (this.#cache.has(href)) return this.ref(href, parent)
@@ -836,7 +837,6 @@ class Loader {
                 }
             }
             // replace hrefs (excluding anchors)
-            // TODO: srcset?
             const replace = async (el, attr) => el.setAttribute(attr,
                 await this.loadHref(el.getAttribute(attr), href, parents))
             for (const el of doc.querySelectorAll('link[href]')) await replace(el, 'href')
@@ -846,6 +846,11 @@ class Loader {
             for (const el of doc.querySelectorAll('[*|href]:not([href])'))
                 el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(
                     el.getAttributeNS(NS.XLINK, 'href'), href, parents))
+            for (const el of doc.querySelectorAll('[srcset]'))
+                el.setAttribute('srcset', await replaceSeries(el.getAttribute('srcset'),
+                    /(\s*)(.+?)\s*((?:\s[\d.]+[wx])+\s*(?:,|$)|,\s+|$)/g,
+                    (_, p1, p2, p3) => this.loadHref(p2, href, parents)
+                        .then(p2 => `${p1}${p2}${p3}`)))
             // replace inline styles
             for (const el of doc.querySelectorAll('style'))
                 if (el.textContent) el.textContent =

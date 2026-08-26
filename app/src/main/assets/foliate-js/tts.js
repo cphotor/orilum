@@ -25,32 +25,11 @@ const getSegmenter = (lang = 'en', granularity = 'word') => {
     const segmenter = new Intl.Segmenter(lang, { granularity })
     const granularityIsWord = granularity === 'word'
     return function* (strs, makeRange) {
-        const str = strs.join('').replace(/\r\n/g, '  ').replace(/\r/g, ' ').replace(/\n/g, ' ')
+        const str = strs.join('')
         let name = 0
         let strIndex = -1
         let sum = 0
-        const rawSegments = Array.from(segmenter.segment(str))
-        const mergedSegments = []
-        for (let i = 0; i < rawSegments.length; i++) {
-            const current = rawSegments[i]
-            const next = rawSegments[i + 1]
-            const segment = current.segment.trim()
-            const nextSegment = next?.segment?.trim()
-            const endsWithAbbr = /(?:^|\s)([A-Z][a-z]{1,5})\.$/.test(segment)
-            const nextStartsWithCapital = /^[A-Z]/.test(nextSegment || '')
-            if (endsWithAbbr && nextStartsWithCapital) {
-                const mergedSegment = {
-                    index: current.index,
-                    segment: current.segment + (next?.segment || ''),
-                    isWordLike: true,
-                }
-                mergedSegments.push(mergedSegment)
-                i++
-            } else {
-                mergedSegments.push(current)
-            }
-        }
-        for (const { index, segment, isWordLike } of mergedSegments) {
+        for (const { index, segment, isWordLike } of segmenter.segment(str)) {
             if (granularityIsWord && !isWordLike) continue
             while (sum <= index) sum += strs[++strIndex].length
             const startIndex = strIndex
@@ -74,7 +53,7 @@ const fragmentToSSML = (fragment, inherited) => {
         if (!node) return
         if (node.nodeType === 3) return ssml.createTextNode(node.textContent)
         if (node.nodeType === 4) return ssml.createCDATASection(node.textContent)
-        if (node.nodeType !== 1) return
+        if (node.nodeType !== 1 && node.nodeType !== 11) return
 
         let el
         const nodeName = node.nodeName.toLowerCase()
@@ -87,15 +66,15 @@ const fragmentToSSML = (fragment, inherited) => {
         else if (nodeName === 'em' || nodeName === 'strong')
             el = ssml.createElementNS(NS.SSML, 'emphasis')
 
-        const lang = node.lang || node.getAttributeNS(NS.XML, 'lang')
+        const lang = node.lang || node.getAttributeNS?.(NS.XML, 'lang')
         if (lang) {
             if (!el) el = ssml.createElementNS(NS.SSML, 'lang')
             el.setAttributeNS(NS.XML, 'lang', lang)
         }
 
-        const alphabet = node.getAttributeNS(NS.SSML, 'alphabet') || inheritedAlphabet
+        const alphabet = node.getAttributeNS?.(NS.SSML, 'alphabet') || inheritedAlphabet
         if (!el) {
-            const ph = node.getAttributeNS(NS.SSML, 'ph')
+            const ph = node.getAttributeNS?.(NS.SSML, 'ph')
             if (ph) {
                 el = ssml.createElementNS(NS.SSML, 'phoneme')
                 if (alphabet) el.setAttribute('alphabet', alphabet)
@@ -113,7 +92,7 @@ const fragmentToSSML = (fragment, inherited) => {
         }
         return el
     }
-    convert(fragment.firstChild, ssml.documentElement, inherited.alphabet)
+    convert(fragment, ssml.documentElement, inherited.alphabet)
     return ssml
 }
 
