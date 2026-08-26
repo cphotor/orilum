@@ -1380,23 +1380,44 @@ export class Paginator extends HTMLElement {
                 Math.max(0, this.start - (distance ?? this.size)), null, true)
             return !this.atStart
         }
-        // 边界早退以「起手指前静止页 rest」为准，而非预览抬高后的 this.page：
-        // 过半屏预览会把 this.page 顶到首页令 atStart 误判，吞掉回补首页的动画（与末页卡半屏对称）。
+        // 列感知回翻：目标 = 当前可视列的前一列真实绝对起点。
+        // 拼接模型里"全局整数页号 × size"并不等于真实内容列，用整数页号会在跨章时落点失准；
+        // 改按当前章真实列起点 -size 踏步。
         const restPrev = this.#scrollBounds?.[0] ?? this.start
-        const restPagePrev = Math.floor((restPrev + this.size / 2) / this.size)
-        if (restPagePrev <= this.#firstContentPage) return
-        // 以「拖动前」的静止位置（#scrollBounds[0]）为基准：拖动预览期间 #scrollBounds 不更新，
-        // 若用 this.page（拖动后的当前页）再 -1，会把预览已翻过的一页再叠一次（每次回翻多翻一页）。
-        const page = restPagePrev - 1
-        // 目标页仍在窗口可读范围内：无缝回翻（跨章直接滚回相邻章内容，不跳章节）。
-        // 左边界不能用固定的「全局页 1」——窗口滑动后左侧章节可能已卸载，
-        // 其区域是空白缓冲列。必须取当前窗口内第一节的实际正文起始页。
-        if (page >= this.#firstContentPage)
-            return this.#scrollToPage(page, 'page', true).then(() => false)
-        // 已回翻到窗口开头：上一章在窗口则无缝滚入，否则跳转加载到上一章末尾。
+        const mainPrev = this.#viewMap.get(this.#index)
+        const mainOffPrev = this.#offsets.get(this.#index) ?? 0
+        const nPrev = Math.round((restPrev - mainOffPrev - this.size) / this.size) // 当前可视列（章内）
+        const prevColStart = mainOffPrev + this.size + (nPrev - 1) * this.size
+        const mainContentStart = mainOffPrev + this.size // 当前章第一列起点
+        if (prevColStart >= mainContentStart)
+            return this.#scrollTo(prevColStart, 'scroll', true).then(() => false)
+        // 越过当前章首 → 回翻跨章：滚到上一章最后一列，发起时即切主章。
         const prev = this.#adjacentIndex(-1)
+        if (prev != null) {
+            const poff = this.#offsets.get(prev)
+            if (poff != null) {
+                this.#view = this.#viewMap.get(prev)
+                this.#index = prev
+                return this.#scrollTo(
+                    poff + this.#viewWidth(this.#viewMap.get(prev)) - this.size * 2,
+                    'scroll', true).then(() => false)
+            }
+            // 上一章尚未就绪：同步等待加载完成，再带动画滚入其末尾（避免瞬切）。
+            return (async () => {
+                await this.#loadView(prev)
+                const off2 = this.#offsets.get(prev)
+                if (off2 == null) return true
+                this.#view = this.#viewMap.get(prev)
+                this.#index = prev
+                await this.#scrollTo(
+                    off2 + this.#viewWidth(this.#viewMap.get(prev)) - this.size * 2,
+                    'scroll', true)
+                return false
+            })()
+        }
+        // 上一章未就绪：回退由 #turnPage 触发 goTo 加载。
         if (prev == null)
-            return this.#scrollToPage(this.#firstContentPage, 'page', true).then(() => false)
+            return this.#scrollTo(mainContentStart, 'scroll', true).then(() => false)
         return true
     }
     #scrollNext(distance) {
@@ -1406,22 +1427,42 @@ export class Paginator extends HTMLElement {
                 Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
             return !this.atEnd
         }
-        // 边界早退以「起手指前静止页 rest」为准，而非预览抬高后的 this.page：
-        // 过半屏预览会把 this.page 顶到末页令 atEnd 误判早退，吞掉补足末页的动画 → 卡半屏（100%复现）。
+        // 列感知推进：目标 = 当前可视列的下一列真实绝对起点。
+        // 拼接模型里"全局整数页号 × size"并不等于真实内容列（每章长度非 size 整数倍、含缓冲列），
+        // 用整数页号会在跨章时落点时准时不准（"某些章跳"）；改按当前章真实列起点 +size 踏步。
         const restNext = this.#scrollBounds?.[0] ?? this.start
-        const restPageNext = Math.floor((restNext + this.size / 2) / this.size)
-        if (restPageNext >= this.#lastContentPage) return
-        // 与 #scrollPrev 对称：以「拖动前」的静止位置（#scrollBounds[0]）为基准 +1，
-        // 而不是用拖动后的 this.page 再 +1（大幅拖动时会把预览已翻过的一页再叠一次，每翻多翻一页）。
-        const page = restPageNext + 1
-        // 窗口内最后一个可读内容页（末章右侧 1 屏空白缓冲列不可停留）。
-        // 目标页仍在窗口可读范围内：无缝推进（跨章直接滚入相邻章内容，不跳回章节开头）。
-        if (page <= this.#lastContentPage)
-            return this.#scrollToPage(page, 'page', true).then(() => false)
-        // 已翻到窗口末尾：下一章在窗口则无缝滚入，否则跳转加载到下一章开头。
+        const mainNext = this.#viewMap.get(this.#index)
+        const mainOffNext = this.#offsets.get(this.#index) ?? 0
+        const nNext = Math.round((restNext - mainOffNext - this.size) / this.size) // 当前可视列（章内）
+        const nextColStart = mainOffNext + this.size + (nNext + 1) * this.size
+        const mainContentEnd = mainOffNext + this.#viewWidth(mainNext) - this.size * 2 // 当前章最后一列起点
+        if (nextColStart <= mainContentEnd)
+            return this.#scrollTo(nextColStart, 'scroll', true).then(() => false)
+        // 越过当前章末 → 前进跨章：滚到下一章第一列，发起时即切主章，
+        // 落定后 #syncMainView 判定一致，不再 MIGRATE 卸载重排 / 平移滚动条。
         const next = this.#adjacentIndex(1)
+        if (next != null) {
+            const noff = this.#offsets.get(next)
+            if (noff != null) {
+                this.#view = this.#viewMap.get(next)
+                this.#index = next
+                return this.#scrollTo(noff + this.size, 'scroll', true).then(() => false)
+            }
+            // 下一章尚未就绪：同步等待加载完成，再带动画滚入其开头；
+            // 避免回退 #turnPage → #goTo → #scrollToAnchor 的瞬切（"动画被偷走"）。
+            return (async () => {
+                await this.#loadView(next)
+                const off2 = this.#offsets.get(next)
+                if (off2 == null) return true
+                this.#view = this.#viewMap.get(next)
+                this.#index = next
+                await this.#scrollTo(off2 + this.size, 'scroll', true)
+                return false
+            })()
+        }
+        // 下一章未就绪：回退由 #turnPage 触发 goTo 加载。
         if (next == null)
-            return this.#scrollToPage(this.#lastContentPage, 'page', true).then(() => false)
+            return this.#scrollTo(mainContentEnd, 'scroll', true).then(() => false)
         return true
     }
     get atStart() {
