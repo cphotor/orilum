@@ -31,7 +31,7 @@
 
         <activity
             android:name=".ui.reader.ReaderActivity"
-            android:exported="false"
+            android:exported="true"
             android:screenOrientation="unspecified" />
     </application>
 

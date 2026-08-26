@@ -328,7 +328,10 @@ class ReaderActivity : ComponentActivity() {
             ),
             "EPUBBridge",
         )
-        webView.loadUrl(ASSET_BASE + "assets/reader.html")
+        // 卷页 Demo 入口：bookPath = "@curl-demo" 时加载独立测试页（验证 WebGL 卷页流畅度）
+        val url = if (bookPath == CURL_DEMO_PATH) ASSET_BASE + "assets/curl-demo.html"
+            else ASSET_BASE + "assets/reader.html"
+        webView.loadUrl(url)
     }
 
     /** 底部安全区高度(px)。沉浸模式下取系统实际 inset（一般为 0 或手势条高），
@@ -635,6 +638,8 @@ class EPUBBridge(
 const val EXTRA_BOOK_PATH = "book_file_path"
 /** 由书架启动阅读器时传入的书主键（>=0 才存取进度）。 */
 const val EXTRA_BOOK_ID = "book_id"
+/** 走卷页 Demo 页（而非阅读器）的特殊 bookPath 值。 */
+const val CURL_DEMO_PATH = "@curl-demo"
 
 private const val ASSET_BASE = "https://appassets.androidplatform.net/"
 private const val TAG = "Orilum.Reader"

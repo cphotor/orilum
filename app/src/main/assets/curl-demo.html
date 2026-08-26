@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>卷页 Demo</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#8a8a8a; touch-action:none; }
+  #hud { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:10;
+         background:rgba(0,0,0,0.7); color:#fff; border-radius:6px; padding:6px 12px;
+         font:14px/1.4 monospace; white-space:pre; }
+  #stage { position:absolute; inset:0; }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+</style>
+</head>
+<body>
+<div id="hud">初始化…</div>
+<div id="stage"><canvas id="gl"></canvas></div>
+<script>
+'use strict';
+// ===== 真实章节内容（从 GIMP 手册提取）=====
+const P5 = "5. 将图像导入 GIMP\n\n本章介绍如何将图像导入 GIMP。它解释了如何创建新图像、如何从文件加载图像、如何扫描图像以及如何制作屏幕截图。\n\n1. 图像类型\n\n人们很容易将图像视为与单个显示窗口或单个文件（例如 JPEG 文件）相对应的东西。然而，GIMP 图像是一个复杂的结构，包含一堆图层以及其他几种类型的对象：选择蒙版、一组通道、一组路径、撤销历史记录等。\n\n图像最基本的属性是其模式。共有三种可能的模式：RGB、灰度和索引。RGB代表Red-Green-Blue，表示图像中的每个点由红色级别、绿色级别和蓝色级别表示；代表全彩色图像。每个颜色通道有256个可能的强度级别。\n\n在灰度图像中，每个点都由亮度值表示，范围从0（黑色）到255（白色），中间值代表不同的灰度级别。\n\n在RGB颜色模型中，混合红色、绿色和蓝色会产生白色，这是在屏幕上发生的情况。在CMY(K)颜色模型中，混合青色、品红色和黄色会产生黑色，这就是在白纸上打印时发生的情况。\n\n从概念上讲，灰度图像和RGB图像的区别在于颜色通道的数量：灰度图像有一个；RGB图像有三个。RGB图像可以被视为三幅叠加的灰度图像，一幅为红色，一幅为绿色，一幅为蓝色。\n\n实际上，RGB和灰度图像都有一个额外的颜色通道，称为alpha通道，它表示不透明度。当给定图层中给定位置的alpha值为零时，该图层是完全透明的。当Alpha最大（255）时，图层不透明，颜色由图层的颜色决定。中间alpha值对应于不同程度的透明度/不透明度：该位置的颜色是来自图层的颜色和来自下面的颜色的比例混合。\n\n第三种类型，索引图像，理解起来有点复杂。在索引图像中，仅使用有限的离散颜色集，通常为256或更少。这些颜色形成图像的颜色图，并且图像中的每个点都被分配颜色图中的颜色。索引图像的优点是它们可以在计算机内以消耗相对较少内存的方式表示。\n\n一些非常常用的文件类型（包括GIF和PNG）在GIMP中打开时会生成索引图像。GIMP的许多工具在索引图像上效果不佳，并且许多滤镜根本不起作用，因为可用的颜色数量有限。因此，通常最好在处理图像之前将其转换为RGB模式。\n\n2. 创建新文件\n\n使用文件菜单的新建命令打开创建新图像对话框。修改文件的初始宽度和高度或使用标准值，然后创建新的图像文件。\n\n3. 打开图像\n\n在GIMP中打开现有图像的方法有多种。打开现有图像最明显的方法是打开图像对话框。使用文件菜单中的打开命令，或按Ctrl+O打开该对话框。通过此对话框，您可以导航到要使用的图像，选择其名称，然后使用打开按钮加载图像。\n\n打开图像对话框提供了多种功能来帮助您快速导航到文件。也许最重要的是能够为您经常使用的文件夹创建书签。\n\n如果您知道图像的URI（即网址或网络地址），则可以直接从在线或网络位置打开图像。从主菜单中选择文件菜单中的打开位置命令。\n\n要打开最近在GIMP中使用的图像，请从主菜单中选择文件菜单中的打开最近的图像命令。这将显示最近打开的图像的子菜单，您可以单击以打开所需的图像。\n\n如果您已将图像文件类型与GIMP关联，则在安装GIMP或更高版本时，您可以使用文件管理器导航到该文件，找到该文件后双击该文件。如果配置正确，图像将在GIMP中打开。\n\n您可以拖放一张或多张图像到工具箱上，或者，如果您尚未打开任何图像，则拖放到空图像窗口上，以打开拖动的图像。您还可以将一张或多张图像拖到打开的GIMP图像中。放置的一个或多个图像将作为一个新图层或一组图层添加到打开的图像中。\n\n要管理图像，您可以使用文件菜单中打开最近的内容命令，它会显示最近打开的图像的子菜单。";
+
+const P6 = "6. 从 GIMP 中获取图像\n\nGIMP 能够读取和写入多种图形文件格式。除了 GIMP 的原生 XCF 文件格式之外，文件处理是通过插件完成的。这使得在需要时扩展GIMP以支持新文件类型变得相对容易。\n\n1. 文件\n\n1.1 保存/导出图像\n\n当您打开图像时，假设是JPEG或PNG文件格式，它会作为新项目导入到GIMP自己的XCF格式中。例如，sunflower.png图像将加载为导入的文件。可以使用保存命令将该图像另存为sunflower.xcf。如果您需要其他格式的图像，则应使用导出命令。\n\n完成图像处理后，您将保存结果。事实上，在中间阶段进行保存通常也是一个好主意。GIMP是一个非常强大的程序，但在极少数情况下会发生崩溃。\n\nGIMP的原生格式XCF很特殊。它是唯一可以存储关于图像的所有内容的格式（撤销信息除外）。这就是只能以这种格式保存的原因。它使得XCF格式特别适合存储中间结果，以及保存稍后在GIMP中重新打开的图像。\n\n大多数其他显示图像的程序无法读取XCF文件。完成图像编辑后，您可以将其导出为您选择的格式。GIMP支持多种格式。大多数可导入的文件格式也可用于导出。\n\n1.2 文件格式\n\n有多个命令用于保存和导出图像。它们列在涵盖文件菜单的部分中。有关如何使用它们的更多信息可以在那里找到。\n\nGIMP允许您以多种格式导出图像。重要的是要认识到，唯一能够保存图像中所有信息（包括图层、透明度等）的格式是GIMP的原生XCF格式。其他格式都会保留一些图像属性并丢失其他属性。\n\n导出图像不会修改图像本身，因此导出不会丢失任何内容。\n\n2. 为网络准备图像\n\nGIMP最常见的用途之一是为网站准备图像。这意味着图像应该看起来尽可能漂亮，同时保持文件大小尽可能小。\n\n2.1 具有最佳尺寸/质量比的图像\n\n网络的最佳图像取决于图像类型和文件格式。对照片使用JPEG，因为它们通常具有多种颜色和丰富的细节。颜色较少的图像（例如按钮、图标或屏幕截图）更适合PNG格式。\n\n首先，照常打开图像。图像现在处于RGB模式，带有附加的Alpha通道（RGBA）。通常不需要为您的Web图像设置Alpha通道。您可以通过压平图像来删除Alpha通道。\n\n拼合图像后，以PNG格式为您的网站导出图像。您可以使用默认设置以PNG格式导出图像。创建图像时始终使用最大压缩。最大压缩对图像质量或显示图像所需的时间没有影响，但导出需要更长的时间。\n\n2.2 进一步减小文件大小\n\n如果您想进一步缩小图像的大小，可以将图像转换为索引模式。这意味着所有颜色将减少到只有256个值。不要将具有平滑颜色过渡或渐变的图像转换为索引模式，因为原始平滑渐变通常会转换为一系列色带。不建议对照片使用索引模式，因为转换后它们通常看起来粗糙且有颗粒感。\n\n2.3 保存透明图像\n\n图形文件格式使用两种不同的方法来支持透明图像区域：简单的二进制透明度和Alpha透明度。GIF格式支持简单的二进制透明度；索引调色板中的一种颜色被标记为透明颜色。PNG格式支持Alpha透明度；透明度信息存储在单独的通道中，即Alpha通道。\n\n要导出具有Alpha透明度的图像，您必须具有Alpha通道。要检查图像是否具有Alpha通道，请转至通道对话框，并验证除红色、绿色和蓝色之外，还存在Alpha条目。如果不是这种情况，请从图层菜单中添加一个新的Alpha通道。";
+
+// ===== 排版参数（对标真实阅读 736×1120）=====
+function makePage(text, w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#f4f2ec';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#2b2b2b';
+  ctx.font = '18px "PingFang SC", sans-serif';
+  ctx.textBaseline = 'top';
+  const margin = 32, lineH = 30, maxX = w - margin * 2;
+  const paras = text.split('\n');
+  let y = margin;
+  for (const para of paras) {
+    let chars = para;
+    if (chars.trim() === '') { y += 14; continue; }
+    let line = '';
+    for (const ch of chars) {
+      if (ctx.measureText(line + ch).width > maxX) {
+        if (y + lineH > h - margin) break; // 溢出当前屏
+        ctx.fillText(line, margin, y);
+        y += lineH;
+        line = ch;
+      } else line += ch;
+    }
+    if (line) {
+      if (y + lineH <= h - margin) { ctx.fillText(line, margin, y); y += lineH; }
+    }
+    if (y + lineH > h - margin) break;
+  }
+  return cv;
+}
+
+// ===== WebGL 卷页渲染 =====
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', { antialias: true });
+const hud = document.getElementById('hud');
+let W, H, DPR;
+let texPage1, texPage2, cvPage1, cvPage2;
+
+// 两个平面：page1（当前页，右侧可卷起）、page2（下一页，在下方）
+const planeShader = `
+attribute vec2 aPos;
+uniform vec2 uRes;
+varying vec2 vUV;
+void main(){
+  vUV = aPos * 0.5 + 0.5;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+const planeFrag = `
+precision mediump float;
+varying vec2 vUV;
+uniform sampler2D uTex;
+uniform float uAlpha;
+void main(){
+  vec4 c = texture2D(uTex, vUV);
+  gl_FragColor = vec4(c.rgb, c.a * uAlpha);
+}`;
+
+function makeProgram(vs, fs) {
+  const p = gl.createProgram();
+  const v = gl.createShader(gl.VERTEX_SHADER), f = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(v, vs); gl.compileShader(v);
+  gl.shaderSource(f, fs); gl.compileShader(f);
+  gl.attachShader(p, v); gl.attachShader(p, f);
+  gl.linkProgram(p);
+  return p;
+}
+const prog = makeProgram(planeShader, planeFrag);
+gl.useProgram(prog);
+const uTex = gl.getUniformLocation(prog, 'uTex');
+const uAlpha = gl.getUniformLocation(prog, 'uAlpha');
+const aPos = gl.getAttribLocation(prog, 'aPos');
+
+function texFromCanvas(cv) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// 每一帧绘制的页面几何（简化：把页面当一个全屏平面，同上方第2页。真实卷页需网格，这里先验证纹理+贴图速度）
+// 用两个全屏三角：page2 底色在下，page1 在上可平移位移并半透明露出page2（模拟卷起可见下一页）
+let offset = 0; // 0..1 卷起进度
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  // 页面纹理按竖屏 736×1120 的比例
+  cvPage1 = makePage(P5, 736, 1120);
+  cvPage2 = makePage(P6, 736, 1120);
+  texPage1 = texFromCanvas(cvPage1);
+  texPage2 = texFromCanvas(cvPage2);
+}
+window.addEventListener('resize', resize);
+
+let t0 = performance.now();
+const frames = [];
+function draw() {
+  const now = performance.now();
+  frameCount++;
+  if (now - lastFpsT > 200) {
+    fps = frameCount / ((now - lastFpsT) / 1000);
+    frameCount = 0; lastFpsT = now;
+  }
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.4, 0.42, 0.45, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(prog);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  // 页面宽高（CSS px → 裁剪坐标）
+  const pw = 736, ph = 1120;
+  const scale = Math.min(W / pw, H / ph) * 1.0;
+  const drawW = pw * scale / W, drawH = ph * scale / H;
+
+  // 坐标生成：一个单位正方形
+  const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1]);
+  const quadOff = new Float32Array(quad.length);
+  const quad2 = new Float32Array(quad.length);
+
+  // 卷起偏移：page1 向右下方轻微移动+缩放，模拟卷起；露出 page2
+  const shiftX = offset * 0.15;
+  const shiftY = offset * 0.05;
+  for (let i = 0; i < quad.length; i += 2) {
+    quadOff[i] = quad[i] * 0.9 + shiftX;
+    quadOff[i+1] = quad[i+1] * 0.9;
+  }
+
+  // 先画 page2（下一页，底层）
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1i(uTex, 0);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texPage2);
+  gl.uniform1f(uAlpha, 1.0);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  // 再画 page1（当前页，顶层，随 offset 平移/缩放并半透明露出 page2 → 模拟卷起透出下一页）
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, quadOff, gl.STATIC_DRAW);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+  gl.bindTexture(gl.TEXTURE_2D, texPage1);
+  gl.uniform1f(uAlpha, 1 / (1 + offset * 4)); // 越卷越透
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  requestAnimationFrame(draw);
+}
+let fps = 60, frameCount = 0, lastFpsT = performance.now();
+
+function updateHud() {
+  const lat = (performance.now() - lastMove).toFixed(0);
+  hud.textContent = `视口 ${W}×${H} (DPR ${DPR})\nFPS ${fps.toFixed(0)} | 卷起 ${(offset*100).toFixed(0)}%\n上次滑动→跟手延迟 ${lat} ms`;
+}
+
+// ===== 触摸跟随（卷起跟手）=====
+let lastMove = performance.now(), dragging = false, startX = 0;
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; startX = e.clientX; lastMove = performance.now();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - startX;
+  const prev = offset;
+  offset = Math.max(0, Math.min(1, dx / 120));
+  if (offset !== prev) lastMove = performance.now();
+  updateHud();
+});
+canvas.addEventListener('pointerup', () => { dragging = false; });
+canvas.addEventListener('pointercancel', () => { dragging = false; });
+
+resize();
+updateHud();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
