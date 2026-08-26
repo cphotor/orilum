@@ -511,6 +511,16 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    /* ---- 章节驻留缓存（跨章切换动画的数据基础） ----
+     * #viewCache: index -> View。已排版完成的章节视图常驻，跨章时不再销毁重建，
+     *             而是直接切可见（叠放在 #container 内，改动 opacity，绝不改父节点——
+     *             本 WebView 改挂载父容器会重载 iframe，丢失样式/排版）。
+     * #preloadQueue/#preloading: 空闲优先级的后台预排队列（按距当前章远近，近者优先）。 */
+    #viewCache = new Map()
+    #preloadQueue = []
+    #preloading = false
+    /** 后台预排覆盖的邻章距离跨度（近章优先，最多各预排此距离内的章）。 */
+    #preloadSpan = 3
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -572,6 +582,9 @@ export class Paginator extends HTMLElement {
             grid-column: 1 / -1;
             grid-row: 2;
             overflow: hidden;
+            /* 定位上下文：多个驻留章节视图绝对定位叠放于此，永不改父节点（WebView 会重载 iframe），
+               激活 = 切换可见( opacity ) + 滚动到目标页。 */
+            position: relative;
         }
         :host([flow="scrolled"]) #container {
             grid-column: 1 / -1;
@@ -734,17 +747,141 @@ export class Paginator extends HTMLElement {
         this.#pageMargin = { top, right, bottom, left }
         this.render()
     }
-    #createView() {
-        if (this.#view) {
-            this.#view.destroy()
-            this.#container.removeChild(this.#view.element)
-        }
-        this.#view = new View({
+    /** 在 #container 内建一个章节视图并绝对定位叠放（同尺寸同原点）。加载后永不改父节点——
+     *  这是本 WebView 下让 iframe 文档/样式存活的关键（改挂载父节点会触发其重载）。 */
+    #makeResidentView(index) {
+        const view = new View({
             container: this,
-            onExpand: () => this.#scrollToAnchor(this.#anchor),
+            onExpand: () => { if (this.#index === index) this.#scrollToAnchor(this.#anchor) },
         })
-        this.#container.append(this.#view.element)
-        return this.#view
+        view.index = index // 记录章节号，供激活时定位；非激活的空闲扩张不触碰活性视图滚动
+        // 绝对定位叠放：占据容器整块，与其它驻留视图原点一致
+        Object.assign(view.element.style, {
+            position: 'absolute',
+            top: '0', left: '0',
+            width: '100%', height: '100%',
+            opacity: '0', // 默认隐藏；激活后置可见
+        })
+        this.#container.append(view.element)
+        return view
+    }
+    /** 置某视图可见 / 隐藏（叠放切换）。opacity 切换不触发 iframe 重载。 */
+    #setViewVisible(view, visible) {
+        if (!view) return
+        view.element.style.opacity = visible ? '1' : '0'
+    }
+    /** 把某章已排好的样式节点应用到指定 doc（缓存视图可能不是当前活性视图，setStyles 只更新活性 View）。 */
+    #applyStylesToDoc(doc) {
+        if (!doc?.head || !this.#styles || !this.#styleMap.has(doc)) return
+        const [before, after] = this.#styleMap.get(doc)
+        if (Array.isArray(this.#styles)) {
+            const [bs, s] = this.#styles
+            before.textContent = bs
+            after.textContent = s
+        } else after.textContent = this.#styles
+    }
+    /** 后台准备并缓存章节视图（构建 + 排版）。命中缓存直接返回；新建成功则入 #viewCache。
+     *  onLoad 在构建完成（样式注入后）触发一次；失败返回 null。 */
+    async #prepView(index, onLoad) {
+        if (this.#viewCache.has(index)) return this.#viewCache.get(index)
+        const section = this.sections[index]
+        if (!section || section.linear === 'no') return null
+        const view = this.#makeResidentView(index)
+        const afterLoad = doc => {
+            // 封面页识别 + 置零 body 边距，使封面图整屏铺满（与官方 #display 一致）
+            if (index === 0 && isCoverLike(doc)) {
+                view.isCover = true
+                const $coverStyle = doc.createElement('style')
+                $coverStyle.textContent =
+                    'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
+                doc.head.append($coverStyle)
+            }
+            if (doc.head) {
+                const $styleBefore = doc.createElement('style')
+                doc.head.prepend($styleBefore)
+                const $style = doc.createElement('style')
+                doc.head.append($style)
+                this.#styleMap.set(doc, [$styleBefore, $style])
+            }
+            this.#applyStylesToDoc(doc)
+            onLoad?.(doc)
+        }
+        const beforeRender = this.#beforeRender.bind(this)
+        try {
+            const src = await section.load()
+            if (typeof src !== 'string') throw new Error(`src of section ${index} is not string`)
+            await view.load(src, afterLoad, beforeRender)
+        } catch (e) {
+            console.warn(e)
+            console.warn(new Error(`Failed to load section ${index}`))
+            if (view.element.parentNode) view.element.parentNode.removeChild(view.element)
+            return null
+        }
+        this.#viewCache.set(index, view)
+        this.dispatchEvent(new CustomEvent('create-overlayer', {
+            detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
+        }))
+        return view
+    }
+    /** 把已就绪的缓存视图切换到可见容器。尺寸恒定（舞台与容器同宽），只挪元素，
+     *  无重排风暴、无白屏；不销毁旧视图，留驻缓存供回退。 */
+    async #activate(index, anchor, select) {
+        const view = this.#viewCache.get(index)
+        // 就绪守卫：仅当文档已装载（#prepView 成功后必有 body）才执行切换，绝不"先挂后等"
+        if (!view?.document?.body) return
+        // 老活性视图隐藏（叠放），新视图显示——节点不改父容器，iframe 不重载，样式/排版常驻
+        if (this.#view && this.#view !== view) this.#setViewVisible(this.#view, false)
+        this.#setViewVisible(view, true)
+        this.#view = view
+        this.#index = index
+        // 视图在构建时已按当时的尺寸/样式排好版，勿在此重排（会破坏列宽）。
+        // 仅在样式此刻已就绪时补套样式；第一屏若在 setStyles 前激活，由随后 setStyles 补齐。
+        if (this.#styles) this.#applyStylesToDoc(this.#view.document)
+        await this.scrollToAnchor((typeof anchor === 'function'
+            ? anchor(view.document) : anchor) ?? 0, select)
+    }
+    /** 空闲预排调度：把确定性邻章按「距当前章远近（Math.abs 距离），近者优先」排队后台构建。
+     *  只在空闲 & 非翻页(未锁定) & 页面可见时执行；每排一章让出一帧，不抢屏幕刷新。 */
+    #schedulePreload() {
+        const cur = this.#index
+        // 按绝对章节序号差升序（越近越优先）；同距离保持前章在前
+        const candidates = []
+        for (let d = 1; candidates.length < this.#preloadSpan; d++) {
+            for (const dir of [-1, 1]) {
+                const i = cur + dir * d
+                if (this.#canGoToIndex(i) && this.sections[i]?.linear !== 'no'
+                    && !this.#viewCache.has(i)) candidates.push(i)
+            }
+            if (candidates.length >= this.#preloadSpan) break
+        }
+        if (!candidates.length) return
+        const seen = new Set(candidates)
+        // 合并：把仍缺的并入队，已有缓存的不干预
+        for (const i of candidates) if (!this.#viewCache.has(i) && !this.#preloadQueue.includes(i))
+            this.#preloadQueue.push(i)
+        if (!this.#preloading) this.#tickPreload()
+    }
+    async #tickPreload() {
+        this.#preloading = true
+        try {
+            while (this.#preloadQueue.length) {
+                // 翻页中 / 后台时暂停预排，避免抢占用户能感知的动画与刷新
+                if (this.#locked || document.hidden) break
+                await new Promise(res => {
+                    if (typeof requestIdleCallback === 'function')
+                        requestIdleCallback(res, { timeout: 2000 })
+                    else setTimeout(res, 300)
+                })
+                const idx = this.#preloadQueue.shift()
+                if (this.#viewCache.has(idx)) continue
+                await this.#prepView(idx)
+                // 让出一帧，把合成器那一帧还给屏幕
+                await new Promise(res =>
+                    requestAnimationFrame(() => requestAnimationFrame(res)))
+            }
+        } finally {
+            this.#preloading = false
+        }
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
@@ -1042,43 +1179,67 @@ export class Paginator extends HTMLElement {
         this.dispatchEvent(new CustomEvent('relocate', { detail }))
     }
     async #display(promise) {
-        const { index, src, anchor, onLoad, select } = await promise
-        this.#index = index
+        const { index, anchor, select, onLoad } = await promise
         const hasFocus = this.#view?.document?.hasFocus()
-        if (src) {
-            const view = this.#createView()
-            const afterLoad = doc => {
-                // 封面页识别：首页且「以一张大图为主、几乎无正文」→ 取消该页四向边距并置零 body 边距，
-                // 使封面图整屏铺满。追加在 head 末尾（晚于宿主注入的全局阅读样式）以高优先级覆盖。
-                if (index === 0 && isCoverLike(doc)) {
-                    view.isCover = true
-                    const $coverStyle = doc.createElement('style')
-                    $coverStyle.textContent =
-                        'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
-                    doc.head.append($coverStyle)
-                }
-                if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
-                    doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
-                    doc.head.append($style)
-                    this.#styleMap.set(doc, [$styleBefore, $style])
-                }
-                onLoad?.({ doc, index })
-            }
-            const beforeRender = this.#beforeRender.bind(this)
-            await view.load(src, afterLoad, beforeRender)
-            this.dispatchEvent(new CustomEvent('create-overlayer', {
-                detail: {
-                    doc: view.document, index,
-                    attach: overlayer => view.overlayer = overlayer,
-                },
-            }))
-            this.#view = view
+        // 首开（尚无活性视图）：交还给引擎官方路径——直接在可见容器建首屏，
+        // 保证样式/边距在其后 applySettings/render 到位时由引擎正常重排，不抢跑缓存。
+        if (!this.#view) {
+            await this.#openInitial({ index, anchor, select, onLoad })
+            return
         }
-        await this.scrollToAnchor((typeof anchor === 'function'
-            ? anchor(this.#view.document) : anchor) ?? 0, select)
+        // 跨章：缓存通道——已排好的章节视图直接切上来（无白屏、无重建等待）。
+        const view = await this.#prepView(index, doc => onLoad?.({ doc, index }))
+        if (view) {
+            await this.#activate(index, anchor, select)
+            this.#schedulePreload()
+        }
         if (hasFocus) this.focusView()
+    }
+    /** 首屏：按官方原始流程在可见 #container 内构建章节视图（不经过后台舞台/预排），
+     *  由引擎保证首开的样式与尺寸正确；构建结果入 #viewCache，供后续跨章复用。 */
+    async #openInitial({ index, anchor, select, onLoad }) {
+        const section = this.sections[index]
+        if (!section) return
+        const view = this.#makeResidentView(index) // 叠放入容器，绝对定位同原点
+        this.#setViewVisible(view, true)         // 首屏可见
+        const afterLoad = doc => {
+            if (index === 0 && isCoverLike(doc)) {
+                view.isCover = true
+                const $coverStyle = doc.createElement('style')
+                $coverStyle.textContent =
+                    'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
+                doc.head.append($coverStyle)
+            }
+            if (doc.head) {
+                const $styleBefore = doc.createElement('style')
+                doc.head.prepend($styleBefore)
+                const $style = doc.createElement('style')
+                doc.head.append($style)
+                this.#styleMap.set(doc, [$styleBefore, $style])
+            }
+            this.#applyStylesToDoc(doc)
+            onLoad?.({ doc, index })
+        }
+        const beforeRender = this.#beforeRender.bind(this)
+        try {
+            const src = await section.load()
+            if (typeof src !== 'string') throw new Error(`src of section ${index} is not string`)
+            await view.load(src, afterLoad, beforeRender)
+        } catch (e) {
+            console.warn(e)
+            console.warn(new Error(`Failed to load section ${index}`))
+            this.#container.removeChild(view.element)
+            return
+        }
+        this.#index = index
+        this.#view = view
+        this.#viewCache.set(index, view)
+        this.dispatchEvent(new CustomEvent('create-overlayer', {
+            detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
+        }))
+        await this.scrollToAnchor((typeof anchor === 'function'
+            ? anchor(view.document) : anchor) ?? 0, select)
+        this.#schedulePreload()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
@@ -1086,19 +1247,13 @@ export class Paginator extends HTMLElement {
     async #goTo({ index, anchor, select}) {
         if (index === this.#index) await this.#display({ index, anchor, select })
         else {
-            const oldIndex = this.#index
+            // 旧章不再卸载：章节视图全驻留缓存，供回退/跨章动画复用。
             const onLoad = detail => {
-                this.sections[oldIndex]?.unload?.()
                 this.setStyles(this.#styles)
                 this.dispatchEvent(new CustomEvent('load', { detail }))
             }
-            await this.#display(Promise.resolve(this.sections[index].load())
-                .then(src => ({ index, src, anchor, onLoad, select }))
-                .catch(e => {
-                    console.warn(e)
-                    console.warn(new Error(`Failed to load section ${index}`))
-                    return {}
-                }))
+            // 章节源由 #prepView 内部加载并缓存，不在此重复加载。
+            await this.#display({ index, anchor, onLoad, select })
         }
     }
     async goTo(target) {
@@ -1181,14 +1336,12 @@ export class Paginator extends HTMLElement {
     }
     setStyles(styles) {
         this.#styles = styles
-        const $$styles = this.#styleMap.get(this.#view?.document)
-        if (!$$styles) return
-        const [$beforeStyle, $style] = $$styles
-        if (Array.isArray(styles)) {
-            const [beforeStyle, style] = styles
-            $beforeStyle.textContent = beforeStyle
-            $style.textContent = style
-        } else $style.textContent = styles
+        // 应用到活性视图（沿用官方逻辑）
+        const activeDoc = this.#view?.document
+        if (activeDoc) this.#applyStylesToDoc(activeDoc)
+        // 同步应用到所有驻留缓存视图，保证切上来时样式已是新设置
+        for (const view of this.#viewCache.values())
+            if (view.document !== activeDoc) this.#applyStylesToDoc(view.document)
 
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() =>
@@ -1202,8 +1355,15 @@ export class Paginator extends HTMLElement {
     }
     destroy() {
         this.#observer.unobserve(this)
-        this.#view.destroy()
+        this.#view?.destroy()
         this.#view = null
+        // 释放所有驻留缓存视图及其章节资源
+        for (const view of this.#viewCache.values()) {
+            view.destroy()
+            view.element.remove()
+        }
+        this.#viewCache.clear()
+        this.#preloadQueue.length = 0
         this.sections[this.#index]?.unload?.()
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
     }
