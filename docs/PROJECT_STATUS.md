@@ -22,6 +22,8 @@
   直接复用排版），左端装回带 prepend 锚定补偿；长条只含 primary±1。
 - **调字号只重排可见章**：`render()` 跳过 parked 视图（只重排 inStrip），避免书末调字号重排整本缓存。
 - **保留**：offset 实时 DOM 累加、跨章无缝滚动、prepend 锚定补偿、`#getViewOffset`/`#renderedViewSize`/`#detectPrimaryView` 跳过 parked。
+- **每章预排状态数组**：`#prepState`（长度=`sections.length`=EPUB spine 章数，解析时确定）；0=未排 / 2=已排完，
+  `#popNearestPrep` 以其 O(1) 判定"排完没"并取下一个待排章；`#loadSection`/`#goTo` 加载后 `#markPrepared` 标记，失败也置 2 防重试风暴。
 - **真机验证**：连翻 55+ 章、前翻后翻无空白/无跳页/无 JS 报错；修复一次 `Maximum call stack`（装回时多余重排导致的链）后稳定。
 - **修复·跨章乱跳（201→400+）**：`#goToEdge` 原用 `#sortedViews` 全量（含全部 parked 预排章）的极值作为长条边缘，
   导致一次跨章跳到很远章。改为取**长条内（非 parked）实际边缘章**后，relocate 逐章推进（273→284）无跳变。
