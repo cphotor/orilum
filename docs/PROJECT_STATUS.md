@@ -8,6 +8,27 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
+## 近期重构 · 全书闲时预排 + 驻留装卸（长条恒 3 章）
+
+> 在三窗口拼接基础上，改为「**全书闲时异步预排 + 章节屏外驻留 + 翻到两端装卸**」：
+> 预排完成的章节以 `position:fixed;left:-9999px`（屏外 parked，同父节点、真实渲染、不占长条）常驻，
+> 翻到某章才装卸回长条两端；长条只露当前章 ±1。据此解决「书末/长读后调字号重排整本缓存」的卡顿。
+
+- **闲时全书预排**：`requestIdleCallback` 分步（降级 `setTimeout`）、按 |距当前章| 升序、同距正方向(后)先，
+  串行每排一章后双 rAF 让帧、每 12 章让出一批；翻页动画中 / `document.hidden` / `#locked` 时暂停让位。
+- **屏外 parked 驻留**：预排视图 `position:fixed; left:-9999px` 挂同一 parent（不重载 iframe、可测宽、不占长条/offsets），
+  是"卸下缓存"，区别于旧的 `destroy` 重排。
+- **两端装卸**：`#loadAdjacentSection`→`#loadSection(index,{hidden})`；装回=unpark（不改父、不复重排，
+  直接复用排版），左端装回带 prepend 锚定补偿；长条只含 primary±1。
+- **调字号只重排可见章**：`render()` 跳过 parked 视图（只重排 inStrip），避免书末调字号重排整本缓存。
+- **保留**：offset 实时 DOM 累加、跨章无缝滚动、prepend 锚定补偿、`#getViewOffset`/`#renderedViewSize`/`#detectPrimaryView` 跳过 parked。
+- **真机验证**：连翻 55+ 章、前翻后翻无空白/无跳页/无 JS 报错；修复一次 `Maximum call stack`（装回时多余重排导致的链）后稳定。
+- **修复·跨章乱跳（201→400+）**：`#goToEdge` 原用 `#sortedViews` 全量（含全部 parked 预排章）的极值作为长条边缘，
+  导致一次跨章跳到很远章。改为取**长条内（非 parked）实际边缘章**后，relocate 逐章推进（273→284）无跳变。
+- **修复·每章只有首页、一翻就到下一章**：`#park/unparkView` 原把 `width:100%` 覆盖了 `View.expand()` 算好的多屏宽
+  （pageCount×屏宽），使每章只剩 1 屏。改为装卸只改 `position/left`、**绝不改 width/height** 后，章内 fraction 多屏递增、
+  index 仅在章末 +1。
+
 ## 近期重构 · 三窗口拼接（readest 方案，替换「叠放驻留」跨章）
 
 > 把跨章从「z-index 叠放驻留 + 切可见」整体替换为 **readest 式三窗口拼接**（flex 行连续长条 + scrollLeft 翻页），

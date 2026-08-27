@@ -530,6 +530,17 @@ export class Paginator extends HTMLElement {
     #minPagesAhead = 5            // 向前预排的最小余页
     /** 天顶距：从 primary 起向两端保留的章节距离（超出的远端 forward 会淘汰）。 */
     #maxViewDistance = 3
+    /* ---- 全书闲时预排 + 驻留池 ----
+     * 预排完成的章节视图以「屏外 parked」方式常驻（position:absolute; left:-9999px，
+     * 同父节点、真实渲染、可测宽，但不占长条布局/不妨碍 offsets）。翻到某章时才 unpark
+     * 装回长条两端。闲时 requestIdleCallback 逐章预排，按 |距当前章| 升序、同距正方向(后)先。 */
+    #idlePreload = false               // 预排循环守卫（同一时刻只跑一个空闲预排循环）
+    #idleWaitRace = null               // 标记本次预排批次是否已被翻页打断（true=应尽快让出）
+    #idleBatchBusy = 0                 // 当前批量内已排章数，用于周期让出合成器
+    /** 可滚动长条（参与 flex，不 parked）的视图相对 primary 的半径（primary±k）。k=1 即“恒 3 章”。 */
+    stripRadius = 1
+    /** 是否已对整个 book 排过一次（避免反复重建待排全集；只是信号，实际遍历总是从中取）。 */
+    #allScheduled = false
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -651,7 +662,7 @@ export class Paginator extends HTMLElement {
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.#justAnchored) this.#justAnchored = false
             else this.#afterScroll('scroll')
-            this.#fillVisibleArea()
+            this.#scheduleAllPreload()
         }, 250))
 
         const opts = { passive: false }
@@ -774,6 +785,7 @@ export class Paginator extends HTMLElement {
     #getViewOffset(index) {
         let offset = 0
         for (const [i, view] of this.#sortedViews) {
+            if (this.#isParked(view)) continue // parked 不占长条、不计偏移
             if (i === index) return offset
             offset += view.element.getBoundingClientRect()[this.sideProp]
         }
@@ -789,6 +801,7 @@ export class Paginator extends HTMLElement {
         const visibleStart = this.#renderedStart
         let offset = 0
         for (const [index, view] of this.#sortedViews) {
+            if (this.#isParked(view)) continue
             const viewSize = view.element.getBoundingClientRect()[this.sideProp]
             if (visibleStart < offset + viewSize - 1) {
                 if (index !== this.#primaryIndex) this.#primaryIndex = index
@@ -797,8 +810,9 @@ export class Paginator extends HTMLElement {
             offset += viewSize
         }
     }
-    /** 新建并插入视图（按 index 排序 insertBefore，保证 flex 行首尾相接的顺序正确）。 */
-    #createView(index) {
+    /** 创建章节视图并入池，初始为「屏外 parked」。parked=绝对/固定定位移出视口但真实渲染、
+     *  同父节点、可测宽、不占长条布局；翻到该章时才 unpark 装回长条两端。 */
+    #buildView(index) {
         const view = new View({
             container: this,
             onExpand: () => {
@@ -806,6 +820,8 @@ export class Paginator extends HTMLElement {
                 if (this.#primaryIndex === index) this.#scrollToAnchor(this.#anchor)
             },
         })
+        // 初始即 parked：移出视口、真实渲染，等待被窗口装卸
+        this.#setParked(view, true)
         this.#views.set(index, view)
         const sorted = this.#sortedViews
         const myPos = sorted.findIndex(([i]) => i === index)
@@ -813,6 +829,58 @@ export class Paginator extends HTMLElement {
         if (nextEntry) this.#container.insertBefore(view.element, nextEntry[1].element)
         else this.#container.append(view.element)
         return view
+    }
+    /** 兼容别名：#loadAdjacentSection/#goTo 里“新建并入池”。 */
+    #createView(index) {
+        return this.#buildView(index)
+    }
+    #isParked(view) {
+        return view && (view.element.style.position === 'fixed'
+            || view.element.style.position === 'absolute')
+            && view.element.style.left === '-9999px'
+    }
+    /** 卸下：把章节移出长条 → 屏外 parked（保留排版，不重载 iframe、不占 offsets/布局）。
+     *  只改 position/left，绝不改 width/height —— 宽度保留 View.expand 算好的多屏宽(pageCount×屏宽)。 */
+    #parkView(view) {
+        if (!view) return
+        Object.assign(view.element.style, {
+            position: 'fixed', left: '-9999px', top: '0',
+        })
+    }
+    /** 装回：把 parked 章节恢复为长条内可见（参与 flex 布局）。宽度不动（expand 已设多屏）。 */
+    #unparkView(view) {
+        if (!view) return
+        Object.assign(view.element.style, {
+            position: 'relative', left: 'auto', top: 'auto',
+        })
+        // 装回复用 parked 时的排版，不在此重排（避免每次装回触发 render→expand→重滚动的链）。
+        // 排版参数变化时由 render()（只重排可见章）或布局变更在恰当时机对齐。
+    }
+    #setParked(view, parked) {
+        if (parked) this.#parkView(view)
+        else this.#unparkView(view)
+        return view
+    }
+    /** 当前可滚动长条应包含的章节 index 集（primary±stripRadius，存在且 linear!=no）。 */
+    #stripIndices() {
+        const set = new Set([this.#primaryIndex])
+        for (let d = 1; d <= this.stripRadius; d++) {
+            for (const dir of [-1, 1]) {
+                const i = this.#primaryIndex + dir * d
+                if (this.#canGoToIndex(i) && this.sections[i]?.linear !== 'no') set.add(i)
+            }
+        }
+        return set
+    }
+    /** 依据 primary 装卸长条：非窗口(primary±k)章 park（卸下），窗口章若已排则 unpark（装回）。
+     *  只负责可见性，不自动改 scroll（由调用方锚定）。 */
+    #syncStrip() {
+        const want = this.#stripIndices()
+        for (const [index, view] of [...this.#views]) {
+            const inWindow = want.has(index)
+            if (inWindow && this.#isParked(view)) this.#unparkView(view)
+            else if (!inWindow && !this.#isParked(view)) this.#parkView(view)
+        }
     }
     #destroyView(index) {
         const view = this.#views.get(index)
@@ -822,16 +890,9 @@ export class Paginator extends HTMLElement {
         this.#views.delete(index)
         this.sections[index]?.unload?.()
     }
-    /** 淘汰远端视图：只淘汰 primary 之后、距视口 > maxViewDistance·size 的（前向）。
-     *  不淘汰 primary 之前（会移位滚动），保证回翻有章可循。 */
+    /** 卸载远离窗口的章节（委托 #syncStrip：非 primary±stripRadius 章 park 卸下，不销毁、保留排版）。 */
     #trimDistantViews() {
-        const { size } = this
-        if (!size) return
-        for (const [index, view] of this.#sortedViews) {
-            if (index <= this.#primaryIndex) continue
-            const offset = this.#getViewOffset(index)
-            if (offset - this.#renderedEnd > size * 10) this.#destroyView(index)
-        }
+        this.#syncStrip()
     }
     /** 把某章已排好的样式节点应用到指定 doc。 */
     #applyStylesToDoc(doc) {
@@ -845,97 +906,132 @@ export class Paginator extends HTMLElement {
     }
     /** 加载并排版一对邻章（index 不在长条内才执行）。prepend（插到当前最前视图上方）
      *  时用锚定补偿校正滚动位，避免插入后视口乱跳。 */
-    async #loadAdjacentSection(index) {
-        if (this.#views.has(index) || !this.#canGoToIndex(index)) return
+    async #loadSection(index, { hidden }) {
+        if (!this.#canGoToIndex(index)) return
         const section = this.sections[index]
         if (!section || section.linear === 'no') return
-        // prepend 检测：插到“当前所有已加载视图”的最上方。浏览器在 scroll 0 时抑制滚动锚定，
-        // 插入的章节会把可见内容顶下去、视口漂进上一章 → 记录插入前位置以备补偿。
-        const firstIndex = this.#sortedViews[0]?.[0]
-        const isPrepend = firstIndex != null && index < firstIndex
-        const startBefore = isPrepend ? this.#renderedStart : 0
+        // 已在池中：若需显示且当前 parked → 装回（unpark）；预排命中(parked)则直返
+        let view = this.#views.get(index)
+        if (view?.document?.body) {
+            if (!hidden && this.#isParked(view)) {
+                const firstIndex = this.#sortedViews[0]?.[0]
+                const isPrepend = firstIndex != null && index < firstIndex
+                this.#unparkView(view)
+                if (isPrepend) this.#compensatePrepend(view)
+            }
+            return view
+        }
+        view = this.#buildView(index) // 初始 parked
+        const afterLoad = doc => {
+            if (index === 0 && isCoverLike(doc)) {
+                view.isCover = true
+                const $coverStyle = doc.createElement('style')
+                $coverStyle.textContent =
+                    'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
+                doc.head.append($coverStyle)
+            }
+            if (doc.head) {
+                const $styleBefore = doc.createElement('style')
+                doc.head.prepend($styleBefore)
+                const $style = doc.createElement('style')
+                doc.head.append($style)
+                this.#styleMap.set(doc, [$styleBefore, $style])
+            }
+            this.#applyStylesToDoc(doc)
+        }
+        const beforeRender = () => this.#lastLayout
         try {
             const src = await section.load()
             if (typeof src !== 'string') throw new Error(`src of section ${index} is not string`)
-            const view = this.#createView(index)
-            const afterLoad = doc => {
-                if (index === 0 && isCoverLike(doc)) {
-                    view.isCover = true
-                    const $coverStyle = doc.createElement('style')
-                    $coverStyle.textContent =
-                        'html, body, body > * { margin: 0 !important; padding: 0 !important; height: 100% !important; min-height: 100% !important; }'
-                    doc.head.append($coverStyle)
-                }
-                if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
-                    doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
-                    doc.head.append($style)
-                    this.#styleMap.set(doc, [$styleBefore, $style])
-                }
-                this.#applyStylesToDoc(doc)
-            }
-            // 邻章复用 primary 的缓存排版（不得再调 #beforeRender 改全局态：direction/class/dir）。
-            const beforeRender = () => this.#lastLayout
             await view.load(src, afterLoad, beforeRender)
-            if (!view.document?.body) {
-                this.#destroyView(index)
-                return
-            }
-            // prepend 锚定补偿：新视图在视口上方新增了 addedSize，滚动位需同步增大，
-            // 以抵消浏览器滚动锚定被抑制（scroll 0）时的漂移；锚定未抑制时 correction≈0 为 no-op。
-            if (isPrepend) {
-                const addedSize = view.element.getBoundingClientRect()[this.sideProp]
-                const correction = startBefore + addedSize - this.#renderedStart
-                if (Math.abs(correction) > 0.5)
-                    this.containerPosition += (this.#vertical ? -1 : 1) * correction
-            }
-            this.dispatchEvent(new CustomEvent('create-overlayer', {
-                detail: {
-                    doc: view.document, index,
-                    attach: overlayer => view.overlayer = overlayer,
-                },
-            }))
         } catch (e) {
             console.warn(e)
-            console.warn(new Error(`Failed to load adjacent section ${index}`))
+            console.warn(new Error(`Failed to load section ${index}`))
+            this.#destroyView(index)
+            return
         }
+        if (!view.document?.body) {
+            this.#destroyView(index)
+            return
+        }
+        if (!hidden) {
+            const firstIndex = this.#sortedViews[0]?.[0]
+            const isPrepend = firstIndex != null && index < firstIndex
+            this.#unparkView(view)
+            if (isPrepend) this.#compensatePrepend(view)
+        }
+        this.dispatchEvent(new CustomEvent('create-overlayer', {
+            detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
+        }))
+        return view
+    }
+    /** 在长条最左（视口上方）装入章节后的锚定补偿：视口内容不动、不闪。 */
+    #compensatePrepend(view) {
+        const startBefore = this.#renderedStart
+        const addedSize = view.element.getBoundingClientRect()[this.sideProp]
+        const correction = startBefore + addedSize - this.#renderedStart
+        if (Math.abs(correction) > 0.5)
+            this.containerPosition += (this.#vertical ? -1 : 1) * correction
+    }
+    /** 兼容旧调用：显示路径（跨章时确保目标章装回长条）。 */
+    #loadAdjacentSection(index) {
+        return this.#loadSection(index, { hidden: false })
+    }
+    /** 取下一个待预排章节：按 |距当前章| 升序，同距正方向(后)先；无则返回 -1。 */
+    #popNearestPrep() {
+        const cur = this.#primaryIndex
+        for (let d = 0; d < this.sections.length; d++) {
+            for (const dir of [1, -1]) {
+                if (d === 0 && dir === -1) continue
+                const i = cur + dir * d
+                if (i >= 0 && i < this.sections.length
+                    && this.sections[i]?.linear !== 'no' && !this.#views.has(i))
+                    return i
+            }
+        }
+        return -1
+    }
+    /** 启动/持续全书闲时预排循环（幂等；requestIdleCallback 分步、双 rAF 让帧、周期让出）。 */
+    async #tickIdlePreload() {
+        if (this.#idlePreload) return
+        this.#idlePreload = true
+        try {
+            while (!this.#isAnimating && !this.#locked && !document.hidden
+                && !this.#idleWaitRace) {
+                const idx = this.#popNearestPrep()
+                if (idx < 0) break // 全书排完
+                await new Promise(res => {
+                    if (typeof requestIdleCallback === 'function')
+                        requestIdleCallback(res, { timeout: 2000 })
+                    else setTimeout(res, 250)
+                })
+                await this.#loadSection(idx, { hidden: true })
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+                this.#idleBatchBusy++
+                if (this.#idleBatchBusy >= 12) { this.#idleBatchBusy = 0; break }
+            }
+        } finally {
+            this.#idlePreload = false
+            if (this.#popNearestPrep() >= 0 && !document.hidden && !this.#isAnimating) {
+                // 异步调度下一批，避免尾部递归与原批次重叠
+                setTimeout(() => {
+                    if (!this.#idleWaitRace && !document.hidden && !this.#isAnimating)
+                        this.#tickIdlePreload()
+                }, 80)
+            }
+        }
+    }
+    #scheduleAllPreload() {
+        this.#idleWaitRace = false
+        this.#allScheduled = true
+        this.#tickIdlePreload()
     }
     /** 预排：保证向前的余页 ≥ #minPagesAhead，主章过短时补前章以填开篇列。 */
     async #fillVisibleArea() {
-        if (this.scrolled || this.#filling || document.hidden || this.#isAnimating) return
-        this.#filling = true
-        try {
-            const { size } = this
-            if (!size) return
-            // 主章不足一屏时，先补前章（前翻 ↑ 是高频）
-            const primaryView = this.#primaryView
-            if (primaryView && primaryView.contentPages > 0
-                && primaryView.contentPages < this.columnCount) {
-                const sorted = this.#sortedViews
-                const firstIndex = sorted[0]?.[0]
-                if (firstIndex != null && firstIndex >= this.#primaryIndex) {
-                    const prevIdx = this.#adjacentIndex(-1, firstIndex)
-                    if (prevIdx != null && !this.#views.has(prevIdx))
-                        await this.#loadAdjacentSection(prevIdx)
-                }
-            }
-            // 填充向前的章节直到余页达标
-            let iterations = 0
-            while (iterations < this.#maxViewDistance) {
-                iterations++
-                const pagesAhead = Math.floor((this.#renderedViewSize - this.#renderedEnd) / size)
-                if (pagesAhead >= this.#minPagesAhead) break
-                const sorted = this.#sortedViews
-                const lastIndex = sorted[sorted.length - 1]?.[0]
-                if (lastIndex == null) break
-                const nextIdx = this.#adjacentIndex(1, lastIndex)
-                if (nextIdx == null) break
-                await this.#loadAdjacentSection(nextIdx)
-            }
-        } finally {
-            this.#filling = false
-        }
+        // 确保窗口内邻章已就绪（未排则在后台排好，翻到时直接装回），并推进全书闲时预排
+        for (const idx of this.#stripIndices())
+            if (!this.#views.has(idx)) this.#loadAdjacentSection(idx) // fire-and-forget 后台排
+        this.#scheduleAllPreload()
     }
     /** 渲染所有已排版视图为同一新 layout（resize / 设置变更时）。offsets 从 DOM 实时算，重排后重锚定。 */
     render() {
@@ -946,6 +1042,9 @@ export class Paginator extends HTMLElement {
         })
         this.#stabilizing = true
         for (const [, view] of this.#views) {
+            // 只重排可见长条内的章；parked 预排章保持旧排版，翻到(装回)时 #unparkView 再按新参数重排，
+            // 避免「书末调字号 → 重排整本缓存」的卡顿
+            if (this.#isParked(view)) continue
             if (view.document) view.render(layout)
         }
         this.#stabilizing = false
@@ -1062,8 +1161,10 @@ export class Paginator extends HTMLElement {
     get #renderedViewSize() {
         if (this.#views.size === 0) return 0
         let total = 0
-        for (const [, view] of this.#views)
+        for (const [, view] of this.#views) {
+            if (this.#isParked(view)) continue // parked 不占长条
             total += view.element.getBoundingClientRect()[this.sideProp]
+        }
         return total
     }
     get #renderedStart() {
@@ -1341,7 +1442,7 @@ export class Paginator extends HTMLElement {
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
         this.#stabilizing = false
-        this.#fillVisibleArea()
+        this.#scheduleAllPreload()
         if (hasFocus) this.focusView()
     }
     async goTo(target) {
@@ -1399,10 +1500,20 @@ export class Paginator extends HTMLElement {
     }
     /** 跨章：从条带边缘跳到相邻章节。目标章若已预排则复用、无空白（首尾相接），否则即时加载。 */
     #goToEdge(dir) {
+        // 边缘 = 当前长条内（非 parked，仍参与 flex）最左/最右的章，而非已预排全书章的极值
+        // 否则跨章会一次跳到很远的已预排章（日志里 291→337 即此因）。
         const sorted = this.#sortedViews
-        const edgeIndex = dir < 0
-            ? sorted[0]?.[0] ?? this.#primaryIndex
-            : sorted[sorted.length - 1]?.[0] ?? this.#primaryIndex
+        let edgeIndex = null
+        if (dir < 0) {
+            for (const [idx, v] of sorted)
+                if (!this.#isParked(v)) { edgeIndex = idx; break }
+        } else {
+            for (let k = sorted.length - 1; k >= 0; k--) {
+                const [idx, v] = sorted[k]
+                if (!this.#isParked(v)) { edgeIndex = idx; break }
+            }
+        }
+        if (edgeIndex == null) edgeIndex = this.#primaryIndex
         const idx = this.#adjacentIndex(dir, edgeIndex)
         if (idx == null) return
         return this.#goTo({
