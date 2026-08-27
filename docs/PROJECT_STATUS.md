@@ -22,30 +22,38 @@
 - **`#goTo` 加载后显示**：`#createView` 加载完后视图从 `position:fixed` 转为 `relative` 进入 flex 流。
 - **修复 `#allScheduled` 语法错误**：移除字段声明时也清除了 `#scheduleAllPreload` 中的引用，避免 JS 私有字段未声明错误。
 
-## 修复 · 长距离滑动翻两页（双翻修复）
+## 修复 · 长距离滑动翻两页 + 跟手（双翻与跟手共存方案）
 
-> reader.html 和 paginator.js 双方都在处理同一组 touch 事件，导致双重翻页：
-> touchmove 各调一次 scrollBy → 滚动距离翻倍；touchend 各翻一次 → 翻两页。
+> 现象：长距离滑动一次翻两页，同时跟手预览丢失、拖动不实时。
+> 根因：reader.html 与 paginator.js 双方都在处理同一组 touch 事件，导致双重处理；
+> 修复为「**单一处理源**」——跟手 scrollBy 与 snap 都由 reader 全权驱动，paginator 自身 touch 处理器短路。
 
 ### 根因
 
-1. **`touchmove` 双 scrollBy**：reader.html 的 `r.scrollBy()` 和 paginator 的 `#onTouchMove` → `scrollBy()` 为同一手指位移各调一次，滚动距离翻倍。
-2. **`touchend` 双翻页**：reader.html 的 `r.next()/r.snap()` 和 paginator 的 `#onTouchEnd` → `snap()` 各翻一次，总计翻两页。
-3. **snap 叠加位移**：`snap()` 基于当前滚动位置 + 速度计算目标页。touchmove 期间 `scrollBy` 已把位置推进到预览页，snap 再用已推进的位置叠加速度，等于把"预览已推进的一页"又算了一次 → 翻两页。
+1. **双 scrollBy 互相干扰**：reader 与 paginator 各自对同一手指位移调用 scrollBy，滚动距离翻倍、跟手错乱。
+2. **双 snap / next/prev 双翻**：touchend 时若 reader 调 `next()/prev()/snap()`、paginator `#onTouchEnd` 又调 `snap()`，各翻一次 → 翻两页。
+3. **snap 叠加位移**：若 snap 基于「当前滚动位置 + 速度」计算目标页，touchmove 期间 scrollBy 已推进到预览页，再叠加速度会把预览已推进的一页又算一次 → 翻两页。
 
-### 修复方案
+### 修复方案（单一处理源）
 
-**reader.html**（`touchmove` / `touchend`）：
-- 移除 `touchmove` 中的 `r.scrollBy()` 调用，scrollBy 预览由 paginator 的 `#onTouchMove` 统一处理。
-- `touchend` 只保留 `r.snap()`（调用 paginator 的统一 snap 逻辑），不再调用 `r.next()/r.prev()`（强制翻一页，与 snap 叠加→双翻）。
-- 点触翻页仍走 `zone-l/zone-r` 的 click 事件，不受影响。
-- 亮度手势仍留在 reader.html 处理。
+**reader.html**（`touchstart` / `touchmove` / `touchend` / `touchcancel`）：
+- `touchstart`：置 `renderer._readerDrag = true`（握手标记，本次触摸由 reader 全权处理）。
+- `touchmove`：横向滑动时调用 `r.scrollBy(-(x - touch.dx), 0)` **实时跟手**露出相邻页（滑动中两页同屏）。
+- `touchend`：只调 `r.snap(-vx, -vy)`，重用 paginator 的统一 snap 逻辑；**不再调用 `r.next()/r.prev()`**（强制翻一页会与 snap 叠加 → 双翻）。
+- `touchcancel`：若触摸被打断，同样复位 `_readerDrag`。
+- 亮度手势仍留在 reader.html 单独处理（纵向判定，与横向翻页正交）。
+
+**paginator.js**（`#onTouchStart` / `#onTouchMove` / `#onTouchEnd`）：
+- 三者顶部都 `if (this._readerDrag) return`。reader 接管本次触摸时，paginator 完全短路，
+  不再 scrollBy / 不再 snap，避免双处理 → 无双 scrollBy(距离翻倍)、无双 snap(翻两页)。
 
 **paginator.js**（`snap()`）：
-- 目标页基于**拖动前的静止基准** `#scrollBounds[0]`，不是当前位置。
+- 目标页基于**拖动前的静止基准 `#scrollBounds[0]`**，不是当前位置。
 - 拖动距离超过半屏 → 按位移方向翻一页；否则按速度方向翻一页（或回弹当前页）。
 - 目标 = `Math.round(rest0 / size) + dir`，一次手势至多翻一页，不叠加位移。
-- 参考历史提交 `6390a7c`（`fix(paginator): prevent double page turn on large swipes`）。
+
+> 实现提交：`c25146e`（`fix(reader): restore finger-following drag with single-owner touch handling`，
+> 基于基线 `ef61274` 的全书长带方案）；另参考 `6390a7c`（早期 prevent double page turn 思路）。
 
 ## 近期重构 · 三窗口拼接（readest 方案，替换「叠放驻留」跨章）
 
