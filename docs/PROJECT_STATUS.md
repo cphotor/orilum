@@ -74,36 +74,6 @@
 - **保留**：四向独立页边距、封面全屏、单章排版、CFI、样式注入、relocate 进度上报等既有能力。
 - **真机验证**（平板）：打开书、章内连翻、跨章连翻 55 章，relocate 连续推进、章节标题随动、无空白无报错。
 
-## 近期重构 · 换回官方 foliate-js 作新基座（去拼接污染）
-
-> 由于自研"多窗口拼接 + scrollLeft 补偿"是失败的产物（跨章乱跳、offset 重排、clamp），把 foliate-js 换回**官方原版 johnfactotum/foliate-js**，作为新的干净重构起点。重新迁移回两个我们真正需要的定制：**四向独立页边距**、**封面全屏**。其余（拼接待滑窗/scrollLeft 动画）一律不再引入。
-
-- **基座来源**：官方 GitHub `johnfactotum/foliate-js`（本地 `/tmp/foliate-origin` 克隆）；替换 assets/foliate-js 下的通用文件（view.js/epub.js/overlayer.js 等升到官方最新），paginator.js 用官方版做手工迁移。
-- **迁移的定制①·四向独立边距**：`View.columnize` 改为接收 `pageMargin(top/right/bottom/left)`，水平模式 `column-width=size-l-r`、`column-gap=r+l`、horizontal padding=t/b 每页生效；`Paginator.setPageMargins()` + `#beforeRender` 传 `pageMargin`。
-- **迁移的定制②·封面全屏**：`isCoverLike(doc)` 识别首页大图章 → `view.isCover=true` + 注入 `html,body,body>*{margin/padding:0;height:100%}`；`setImageSize` 用 `effMargin=isCover?0` + svg 改 viewBox 撑满整页。
-
-### 备查 · 封面全屏 24px 白边解法（核心定制，勿再丢失）
-
-- **现象**：翻到封面整屏时，左右/四周出现约 24px 白边。
-- **根因**：foliate 默认 `#container { grid-column: 2/5 }` 被四周 `--_half-gap` 轨道压成**窄栏**（内容宽 < 满屏），封面被套了栏约束 → 四周露白。
-- **解法（必须随每次升级保留）**：把 `#container` 改为 **`grid-column: 1/-1; grid-row: 2`**（横向恒满屏）。左右页边距不再依赖外部窄栏，改由 `columnize` 内容内边距（四向 `pageMargin` 的 l/r）处理。这样容器宽度恒定，封面无白边，正文边距靠内部 padding。
-- 若再次替换 foliate-js，务必把此 `#container` 网格定制与新迁移的四向边距一起保留，否则封面白边复现。
-
----
-
-## 近期决策 · 阅读渲染内核重构（章节长条驻留模型）
-
-> 跨章翻页「乱跳 / 大半屏弹回 / 连翻两页」多次修补未根除，定位为**三窗口拼接 + 滚动补偿**路线本身的结构性缺陷（offsets 重排与 scrollLeft 天然不同步、章节宽度异步变化、多回调互踩）。经讨论确定整体重构方向，**作为实现基准**，详录于 [`READER_ENGINE.md`](READER_ENGINE.md)。
-
-- **foliate.js 职责收缩**：只做「单章排版 → 横向长条 + 页定位」，不再负责多章拼接 / 滚动翻页 / 窗口迁移 / 滚动补偿 / 动画。
-- **章节长条全驻留**：每章排好即常驻不丢弃（内存评估：全书含图约几百 MB，现代设备无压力；图片按需采样解码兜底）。
-- **三窗口 = 三个独立长条（不拼接）**：按「当前页靠章首 → 优先排前章 / 靠章尾 → 优先排后章」后台预排，运行时至少前/中/后三章就绪；回翻只需前一章最后一页，开销小。
-- **动画自研（真实 DOM + 3D 变换）**：章内滚动动画 + 跨章位图/3D 过渡 + 落位切换章节视图；为未来卷页预留同一架构。不用引擎动画（引擎仅有 scrollLeft 线性插值，无法支撑卷页）。
-- **跨会话恢复**：退出时持久化「当前屏 ± 1 屏」三张位图，重开秒显、后台恢复、无缝过渡；排版设置变更即作废位图。
-- **大章预案**：章节体积预检，小/中章无缝，超大章走「排版中」过渡屏 + 就绪淡入。
-
----
-
 ## 近期更新 · 设置存储分层（设计基线）
 
 > 确立「公共（全局） vs 书籍（私有）」设置分层模型，作为后续实现与功能扩展的设计基线（**本次仅落文档，未改代码**；设置项仍在演进中，过早建模易返工）。
