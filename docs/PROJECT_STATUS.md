@@ -127,7 +127,7 @@
 - **封面切换闪烁**：封面 view 一进窗口就让网格保持整宽（按 window 内是否有封面色判定），避免「先窄栏渲染再拉宽」的白边闪烁。
 - **首章无前导空白缓冲**：全书首章元素整体左移 1 屏（内容落 `scroll≈0`），打开书/回翻到书首不再先见空白或“多翻一页才能见封面”。
 - **尺寸漂移修复（封面横切/半屏错位同根）**：`View.expand()` 原来只在 `pageCount` 变化时重设 iframe/element 尺寸；当分页步长 `size` 变化而 `pageCount` 未变时，iframe 停在旧宽、内容按新尺寸溢出旧裁剪区 → 右侧被裁 / 章末半屏。现以记录 `#sizedFor` 检测「size 变了但 pageCount 没变」，一并重设；并把 `#viewWidth` 改为派生值（列数×屏宽+两屏缓冲）而非实测 `getBoundingClientRect`，消除亚像素漂移。
-- **单一滑动阈值 + rest 基准翻页边界**：翻页触发统一为一个固定像素阈值——未过阈值回弹当前页、超过则动画按方向继续到相邻页；`snap()` 只回弹，不再做重复的半页/方向判定（原“防连续翻页”的 `dir/THRESH` 复判随之移除）。`#scrollNext/#scrollPrev` 的边界早退改按「起手指前静止页 `rest`」判定，根治「过半屏滑到末页卡在中间」（此前预览把 `this.page` 顶到末页令 `atEnd`/`atStart` 误判、吞掉补足动画）。
+- **rest 基准翻页边界 + 防连翻（单一处理源）**：`snap()` 基于**拖动前静止基准** `rest0 = #scrollBounds[0]`（不是当前位置），`delta = 当前位置 - rest0`；`|delta| > THRESH`（`THRESH = size/2`）按位移方向取 `dir`、否则按速度方向；目标 = `round(rest0 / size) + dir`，一次手势至多翻一页，越界走 `#goToEdge`。既规避「预览 scrollBy 已推进、再用当前 position/速度叠加 → 连翻两页」，也规避「预览把当前页顶到末页、atEnd/atStart 误判」。
 - **末页尾随空白**：末章右侧 1 屏尾随空白缓冲不纳入可滚范围，书末不再出现“翻过头进空白页”。
 - **现场取证**：一次性诊断桥 `EPUBBridge.diagnosticPaginationInfo`（Kotlin `Log.i("DIAG_PAGINATOR")`，单次输出规避 OriginOS 限流）定位翻页边界；排查后已移除相关诊断代码。
 
