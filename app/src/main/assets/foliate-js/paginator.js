@@ -526,6 +526,7 @@ export class Paginator extends HTMLElement {
     #lastVisibleRange
     #stabilizing = false          // goTo 稳定期（抑制 onExpand 抢滚动）
     #isAnimating = false          // snap 滚动动画中
+    #trimming = false             // 缓冲外章节销毁中（防重入）
     columnCount = 1               // 本项目单栏整屏（每屏一页）
     /* ---- 全书长带 + 闲时预排 ----
      * 所有预排完成的章节视图都拼入同一横向长条（flex row），按章节顺序首尾相接，
@@ -674,6 +675,9 @@ export class Paginator extends HTMLElement {
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.#justAnchored) this.#justAnchored = false
             else this.#afterScroll('scroll')
+            // 翻页静止后：销毁缓冲窗口外的远章节，并补齐新窗口内未排章。
+            // 销毁右侧(未来)章不动 scroll；左侧(已读历史)章删后由 scrollToAnchor 归位，根治"跳回前一章"。
+            this.#trimDistantViews()
             this.#scheduleAllPreload()
         }, 250))
 
@@ -964,7 +968,60 @@ export class Paginator extends HTMLElement {
         }
         try { window.EPUBBridge?.log?.('[cmp] startBefore=' + Math.round(startBefore) + ' addedSize=' + Math.round(addedSize) + ' correction=' + Math.round(correction) + ' apply=' + (Math.abs(correction) > 0.5) + ' scrollNow=' + Math.round(this.#container[this.scrollProp]) + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' sb=' + JSON.stringify(this.#scrollBounds?.map(v => Math.round(v)))) } catch (_) {}
     }
-    /** 取下一个待预排章节：按 |距当前章| 升序，同距正方向(后)先；用 #prepState[i]!==2 判"未排"；无则 -1。 */
+    /** 缓冲窗口页数上限：当前章前后各尽量保留这么多页；至少保留相邻 1 章。 */
+    static get BUFFER_PAGES() { return 10 }
+    /** 判断某章是否落在「当前章前后各 max(至少1章, 10页)」缓冲窗口内。
+     *  从 primary 沿方向累计已排版章的 contentPages（未排章页数未知，保守按 1 页估，
+     *  让判定偏宽松 → 多留不误删）；相邻 1 章无条件保留（跨章无缝必须）。 */
+    #isWithinBuffer(index) {
+        if (index === this.#primaryIndex) return true
+        const n = this.sections?.length ?? 0
+        if (index < 0 || index >= n) return false
+        if (Math.abs(index - this.#primaryIndex) <= 1) return true // 至少相邻 1 章
+        const BUFFER = Paginator.BUFFER_PAGES
+        const step = index > this.#primaryIndex ? 1 : -1
+        let pages = 0
+        for (let j = this.#primaryIndex + step; ; j += step) {
+            if (j < 0 || j >= n) return false
+            const v = this.#views.get(j)
+            pages += v?.contentPages ?? 1
+            if (j === index) break
+        }
+        return pages <= BUFFER
+    }
+    /** 销毁落在缓冲窗口外的章节，使长条维持在「前 max(至少1章,10页) + 当前章 + 后 max(至少1章,10页)」。
+     *
+     *  防跳回要点：
+     *  - 右侧（index>primary）章在视口右外，销毁后 scrollLeft 不变、视口不动 → 直接 destroy。
+     *  - 左侧（index<primary）已读历史章销毁会让 flex 内容左移、视口错位。**不用手算子级 scroll
+     *    补偿**（那是"跳回前一章"的老雷区），而是删完后用框架既有的 scrollToAnchor(anchor) 重新定位
+     *    到当前页 —— anchor 是当前章内的可见范围/fraction，不随被删历史章变化，因此能精确归位。 */
+    #trimDistantViews() {
+        if (this.#views.size <= 1 || this.#trimming) return
+        this.#trimming = true
+        try {
+            const primary = this.#primaryIndex
+            if (primary < 0) return
+            const drop = [...this.#views.keys()].filter(i => i !== primary && !this.#isWithinBuffer(i))
+            if (drop.length === 0) return
+            for (const i of drop) if (i > primary) this.#destroyView(i)  // 右侧：不动 scroll，安全
+            const left = drop.filter(i => i < primary)
+            for (const i of left) this.#destroyView(i)                   // 左侧：删后由 scrollToAnchor 归位
+            try { window.EPUBBridge?.log?.('[trim] drop=[' + drop.join(',') + '] keep=[' +
+                [...this.#views.keys()].sort((a, b) => a - b).join(',') + '] primary=' + primary) } catch (_) {}
+            // 左侧有删除 → 重定位回当前页；异步一帧让销毁后布局稳定再定位
+            if (left.length) {
+                const anchor = this.#anchor ?? 0
+                setTimeout(() => {
+                    this.scrollToAnchor(anchor)
+                    this.#trimming = false
+                }, 0)
+            } else this.#trimming = false
+        } catch (_) {
+            this.#trimming = false
+        }
+    }
+    /** 取下一个待预排章节：按 |距当前章| 升序，同距正方向(后)先；仅取缓冲窗口内未排章，超出不排。 */
     #popNearestPrep() {
         const cur = this.#primaryIndex
         // 从 d=1 起，跳过 cur 自己（d=0 会算出 cur，导致死循环卡当前章）
@@ -972,7 +1029,8 @@ export class Paginator extends HTMLElement {
             for (const dir of [1, -1]) {
                 const i = cur + dir * d
                 if (i >= 0 && i < this.sections.length
-                    && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
+                    && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2
+                    && this.#isWithinBuffer(i))
                     return i
             }
         }
