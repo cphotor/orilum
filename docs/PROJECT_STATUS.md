@@ -8,19 +8,32 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
-## 近期重构 · 全书长带（替代 parked 装卸）
+## 当前渲染模型 · 三窗口缓存（最终方案）
 
-> 因 `position:fixed;left:-9999px` 屏外驻留的 iframe 合成层导致 WebView 合成线程积压，出现"屏幕跳到两页之间卡死"的视觉错位。
-> 改为 **全书长带方案**（参考 readest）：所有预排章节直接拼入 flex 长条，不做 parked 装卸，不淘汰远章节，永久驻留 DOM。
+> foliate-js 是最新定案：**长条只保留「当前章 ± 相邻 1 章」共 ≤3 章**（三窗口缓存），
+> 分栏完成即装配进 flex 长条，翻页用 scrollLeft + snap，跨章走 `#goToEdge` 换 primary 并重新收敛窗口。
+> 取代此前反复失败的全书长带 / 页数缓冲窗口方案（见下方「演进里程碑」）。
 
-- **全书长带**：`#buildView` 初始 `position:fixed;left:-9999px`（保持布局计算但不显示），加载完成后转为 `position:relative` 进入 flex 流。
-- **移除 parked 机制**：删除 `#isParked`/`#parkView`/`#unparkView`/`#setParked`/`#stripIndices`/`#syncStrip`/`#trimDistantViews`/`stripRadius`/`#filling` 等字段和方法。
-- **`#render()` 重排所有视图**：不再跳过 parked 视图，调字号/边距时全书已排章节统一重排（用户操作频率低，不影响体验）。
-- **`#getViewOffset`/`#detectPrimaryView`/`#renderedViewSize`**：不再跳过 parked 视图，所有已排章节参与偏移量计算。
-- **`#goToEdge` 取首尾极值**：所有视图已拼入长条，直接取 `#sortedViews` 首尾作为边缘。
-- **`#loadSection` 简化**：不再接收 `{ hidden }` 参数，排完即显示并装配，prepend 时锚定补偿。
-- **`#goTo` 加载后显示**：`#createView` 加载完后视图从 `position:fixed` 转为 `relative` 进入 flex 流。
-- **修复 `#allScheduled` 语法错误**：移除字段声明时也清除了 `#scheduleAllPreload` 中的引用，避免 JS 私有字段未声明错误。
+- **三窗口判定 = 纯章序差**：`#isWithinBuffer(index)` 仅判断 `|index - primary| ≤ 1`，**不依赖任何章的 contentPages**。
+  - 这是根治此前"跨章回跳一页 / 预排↔销毁震荡"的关键：因为判定输入与排版无关，**预排和销毁对同一章永远给出同一结论**，
+    不再出现"排前估1页=界内、排后真实N页=界外"的翻转。
+- **`#stripOrder` 章序索引**：长条内实际顺序的章 index 数组。`#getViewOffset / #getPagesBeforeView / #renderedViewSize /
+  #detectPrimaryView / #sortedViews` 全部基于它，offset = 前缀 `Σ contentPages × size` 推导，**不实测 `getBoundingClientRect`**，
+  确定性、不随布局时序漂移。`#buildView`/`#destroyView` 负责维护它的插入/移除。
+- **预排**：`#tickIdlePreload` → `#popNearestPrep` 只取 `#isWithinBuffer` 内的未排章（即 primary±1），近到远，排完即停。
+  `prepState[]` 记录全书每章处理状态（0未排/2已排），`#destroyView` 销毁时统一置 0，保证窗口内章总能被补回、不产生空洞。
+- **销毁（收敛窗口）**：`#trimDistantViews` 从远到近销毁所有 `|i-primary|>1` 的章；左侧销毁用
+  `scroll = preScroll - leftTotal`（`leftTotal` 由 contentPages×size 精确算）保持视口，避免 clamp 竞态。
+- **翻页**：拖动跟手 `scrollBy`、松手 `snap`（基于拖动前静止基准 `#scrollBounds[0]`，一次手势至多翻一页）；
+  章末越界 → `#goToEdge` 加载邻章换 primary → trim 收敛到新三窗口。
+- **跨章回跳一页已根除**：锚定在「判定纯章序差 + offset 确定性前缀和」，不再有页数未知导致的基准错位。
+- **真机验证**：连续跨章前/后翻、目录跳转、回翻已销毁历史章，均稳定、无回跳、无空洞。
+
+### 演进里程碑（历史方案，均已取代，仅作决策留痕）
+- **parked 屏外驻留** → 因 `position:fixed;left:-9999px` 合成层积压导致"跳两页间卡死"，弃。
+- **全书长带（永久驻留全章节）** → 不用 parked、整本拼入长条，稳定但长条越长排版越慢（调字号整本重排 10 分钟），弃。
+- **页数缓冲窗口（前后各10页，预排+销毁）** → 因"该章未排页数未知"使预排/销毁对同一章节判定翻转 → 排↔销震荡 + 跨章回跳，弃。
+- **三窗口缓存（当前）** → 判定纯章序差、offset 确定，稳定收敛，为最终采用。
 
 ## 修复 · 长距离滑动翻两页 + 跟手（双翻与跟手共存方案）
 
@@ -52,27 +65,8 @@
 - 拖动距离超过半屏 → 按位移方向翻一页；否则按速度方向翻一页（或回弹当前页）。
 - 目标 = `Math.round(rest0 / size) + dir`，一次手势至多翻一页，不叠加位移。
 
-> 实现提交：`c25146e`（`fix(reader): restore finger-following drag with single-owner touch handling`，
-> 基于基线 `ef61274` 的全书长带方案）；另参考 `6390a7c`（早期 prevent double page turn 思路）。
-
-## 近期重构 · 三窗口拼接（readest 方案，替换「叠放驻留」跨章）
-
-> 把跨章从「z-index 叠放驻留 + 切可见」整体替换为 **readest 式三窗口拼接**（flex 行连续长条 + scrollLeft 翻页），
-> 根治此前「多视图拼接 + offset 表 + scrollLeft 补偿」与「叠放驻留」各自的稳定性缺陷；真机快速连翻 55 章无空白/无跳页。
-
-- **核心机制（对齐 readest）**
-  1. **不存 offset 表**：`#getViewOffset(index)` 每次遍历 `#sortedViews` 实时累加各视图实测宽度（`getBoundingClientRect`），
-     从根上绕开旧「offsets 表与 scrollLeft 不同步」「章节宽度异步重排漂移」两个结构性坑。
-  2. **视图按 index `insertBefore` 排成 flex 行**：`#container` 改 `display:flex; flex-direction:row`，相邻章首尾相接。
-  3. **`View.expand()` 去掉官方 `+size×2` 空白缓冲**：视图宽度=纯内容宽 → 跨章无空白页。
-  4. **prepend 锚定补偿**：`#loadAdjacentSection` 在前方插章时记录 `startBefore`，插入后
-     `correction = startBefore + addedSize - renderedStart`，`containerPosition += correction`，视口不乱跳。
-  5. **primary 视图**：`#primaryIndex` + `#detectPrimaryView()`，`page/pages/fraction` 均相对 primary 计算。
-- **翻页**：章内 = scrollLeft + snap（拖动预览实时 scroll，松手 `animated` 时 rAF 缓动；跨章 = 长条连续滚动无缝直达，
-  仅当顶到长条最远端才 `#goToEdge` 加载邻章）。
-- **预排**：`#fillVisibleArea` 保证向有余页 ≥5（向前最多补齐 3 章），主章不足一屏补前章；offsets 实时算、随时可淘汰远端。
-- **保留**：四向独立页边距、封面全屏、单章排版、CFI、样式注入、relocate 进度上报等既有能力。
-- **真机验证**（平板）：打开书、章内连翻、跨章连翻 55 章，relocate 连续推进、章节标题随动、无空白无报错。
+> 实现提交：`c25146e`（`fix(reader): restore finger-following drag with single-owner touch handling`）；
+> 双翻与跟手的判定在后续三窗口重组 `b19081c` 中保持有效。另参考 `6390a7c`（早期 prevent double page turn 思路）。
 
 ## 近期更新 · 设置存储分层（设计基线）
 
