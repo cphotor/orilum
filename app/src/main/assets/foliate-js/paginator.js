@@ -880,6 +880,9 @@ export class Paginator extends HTMLElement {
         // 维护 #stripOrder：移除该章
         const p = this.#stripOrder.indexOf(index)
         if (p >= 0) this.#stripOrder.splice(p, 1)
+        // 重置预排状态：所有销毁路径统一在此清零，预排才会把"仍在窗口内/之后又会回到窗口"的章补排回，
+        // 避免"513→515 无 514"这类空洞（此前 #goTo 清空/加载失败等旁路销毁未重置 → 章被永久漏排）。
+        if (index >= 0 && index < this.#prepState.length) this.#prepState[index] = 0
         this.sections[index]?.unload?.()
     }
     #snap(label) {
@@ -985,28 +988,12 @@ export class Paginator extends HTMLElement {
         }
         try { window.EPUBBridge?.log?.('[cmp] startBefore=' + Math.round(startBefore) + ' addedSize=' + Math.round(addedSize) + ' correction=' + Math.round(correction) + ' apply=' + (Math.abs(correction) > 0.5) + ' scrollNow=' + Math.round(this.#container[this.scrollProp]) + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' sb=' + JSON.stringify(this.#scrollBounds?.map(v => Math.round(v)))) } catch (_) {}
     }
-    /** 缓冲窗口页数上限：当前章前后各尽量保留这么多页；至少保留相邻 1 章。 */
-    static get BUFFER_PAGES() { return 10 }
-    /** 判断某章是否落在「当前章前后各 max(至少1章, 10页)」缓冲窗口内。
-     *  从 primary 沿方向累计已排版章的 contentPages；未排章页数未知，**统一按窗口上限估**，
-     *  使得「预排判定」与「销毁判定」对同一章的结论一致——否则排前按1页=界内、排后按真实页=界外，
-     *  会引发"销毁↔预排补回"的无限震荡（死循环）。相邻 1 章无条件保留（跨章无缝必须）。 */
+    /** 判断某章是否落在「当前章前后各 1 章」的三窗口缓存内。
+     *  纯章序差判定，不依赖任何章的 contentPages → 预排与销毁对同一章判定永远一致，
+     *  彻底消除「排前按1页=界内、排后按真实页=界外」导致的排↔销震荡。 */
     #isWithinBuffer(index) {
-        if (index === this.#primaryIndex) return true
-        const n = this.sections?.length ?? 0
-        if (index < 0 || index >= n) return false
-        if (Math.abs(index - this.#primaryIndex) <= 1) return true // 至少相邻 1 章
-        const BUFFER = Paginator.BUFFER_PAGES
-        const step = index > this.#primaryIndex ? 1 : -1
-        let pages = 0
-        for (let j = this.#primaryIndex + step; ; j += step) {
-            if (j < 0 || j >= n) return false
-            const v = this.#views.get(j)
-            // 未排章页数未知：按 >窗口上限估，使其判为窗口外，交给预排(近到远)先排近邻、不排远处
-            pages += v?.contentPages ?? (BUFFER + 1)
-            if (j === index) break
-        }
-        return pages <= BUFFER
+        if (Math.abs(index - this.#primaryIndex) <= 1) return true
+        return false
     }
     /** 销毁落在缓冲窗口外的章节，使长条维持在「前 max(至少1章,10页) + 当前章 + 后 max(至少1章,10页)」。
      *
@@ -1015,7 +1002,8 @@ export class Paginator extends HTMLElement {
      *  - **销毁后不手工减 scroll，而按 primary 章 fraction 用 scrollToAnchor 重新定位**：销毁左侧章使长条
      *    总宽变短、浏览器 clamp scrollLeft，手算减 scroll 会和 clamp 打架把视口拖回上一章；由引擎按销毁后
      *    的新 offset + primary 内部比例归位，不依赖手算、不怕 clamp。
-     *  - **不重置 prepState**：销毁的是窗口外远章，无需补回；重置反而触发"销毁↔预排"死循环。
+     *  - **重置 prepState**：被销毁章 prepState 清 0，仍在窗口内会被后续 #scheduleAllPreload 补排回，
+     *    避免"513→515 无 514"型空洞；窗口外章预排判界外不补排，不会死循环。
      *  - **静止守卫**：仅无翻页动画/稳定期/锁定时销毁，不与 snap 竞争。 */
     #trimDistantViews() {
         if (this.#views.size <= 1 || this.#trimming) return
@@ -1039,9 +1027,10 @@ export class Paginator extends HTMLElement {
             // 左侧待销毁章的总宽度（用逻辑 contentPages×size，确定）
             let leftTotal = 0
             for (const i of left) leftTotal += (this.#views.get(i)?.contentPages ?? 0) * size
-            for (const i of right) this.#destroyView(i)
+            for (const i of right) this.#destroyView(i)   // prepState 重置已统一收敛在 #destroyView 内
             for (const i of left) this.#destroyView(i)
-            // 注意：不重置 prepState —— 销毁的是窗口外远章，无需补回；重置会触发"销毁↔预排"死循环。
+            // 重置 prepState=0 已在 #destroyView 统一处理：销毁的章若仍在窗口内，会被后面的 #scheduleAllPreload
+            // 补排回，避免"513→515 无 514"这类空洞；窗口外的章预排判界外不会补排，故不会死循环。
             // 销毁后绝对赋值：scroll = preScroll - leftTotal，保持视口内容不动。
             if (leftTotal) this.containerPosition = preScroll - (this.#vertical ? -1 : 1) * leftTotal
             this.#scrollBounds = [this.#container[this.scrollProp],
@@ -1300,14 +1289,6 @@ export class Paginator extends HTMLElement {
         if (!dir) return this.#scrollToPage(Math.round(rest0 / size), 'snap')
         // 目标 = 拖动前静止整页 + dir（仅一次，不叠加位移）
         const target = Math.round(rest0 / size) + dir
-        // [诊断] 输出页码，定位跨章回跳
-        try { window.EPUBBridge?.log?.('[pg] prio=' + this.#primaryIndex +
-            ' relPage=' + this.#renderedPage +
-            ' pagesBeforePri=' + this.#getPagesBeforeView(this.#primaryIndex) +
-            ' cp=' + (this.#primaryView?.contentPages ?? '?') +
-            ' scroll=' + Math.round(this.#container[this.scrollProp]) +
-            ' rest0=' + Math.round(rest0) + ' dir=' + dir +
-            ' target=' + target + ' pages=' + this.#renderedPages) } catch (_) {}
         // 越界：直接去相邻章（从对应边缘起）
         const pages = this.#renderedPages
         if (target < 0) return this.#goToEdge(-1)
