@@ -527,14 +527,11 @@ export class Paginator extends HTMLElement {
     #lastVisibleRange
     #stabilizing = false          // goTo 稳定期（抑制 onExpand 抢滚动）
     #isAnimating = false          // snap 滚动动画中
-    #trimming = false             // 缓冲外章节销毁中（防重入）
+    #trimming = false             // 窗口外章节销毁中（防重入）
     columnCount = 1               // 本项目单栏整屏（每屏一页）
-    /* ---- 全书长带 + 闲时预排 ----
-     * 所有预排完成的章节视图都拼入同一横向长条（flex row），按章节顺序首尾相接，
-     * 不做 parked 装卸，不淘汰远章节，永久驻留 DOM 和排版。闲时 requestIdleCallback
-     * 逐章预排，按 |距当前章| 升序、同距正方向(后)先。 */
-    #idlePreload = false               // 预排循环守卫（同一时刻只跑一个空闲预排循环）
-    #idleWaitRace = null               // 标记本次预排批次是否已被翻页打断（true=应尽快让出）
+    /* ---- 三窗口缓存 + 预排 ----
+     * 长条只保留当前章 ± 相邻 1 章（≤3 章）；预排只保证 primary±1 在池中。 */
+    #idlePreload = false               // 预排循环守卫（同一时刻只跑一个预排循环）
     /* 每章预排状态数组：长度 = this.sections.length（EPUB spine 章节数，解析时确定）。
      * 0 = 未排（待处理），2 = 已排完（已 `#loadSection` 成功并入 #views；失败也置 2 以免反复重试）。
      * 供 #popNearestPrep 用 O(1) 判定"该章排完没"，替代对 #views 的全书扫描。 */
@@ -1043,55 +1040,34 @@ export class Paginator extends HTMLElement {
             this.#trimming = false
         }
     }
-    /** 取下一个待预排章节：按 |距当前章| 升序，同距正方向(后)先；仅取缓冲窗口内未排章，超出不排。 */
+    /** 取下一个待预排章节：三窗口下只可能是 primary 的相邻两章（primary±1）。
+     *  返回第一个「未排(@prepState!==2)且非 linear=no」的相邻章；都不满足则 -1（窗口内已排齐）。 */
     #popNearestPrep() {
         const cur = this.#primaryIndex
-        // 从 d=1 起，跳过 cur 自己（d=0 会算出 cur，导致死循环卡当前章）
-        for (let d = 1; d < this.sections.length; d++) {
-            for (const dir of [1, -1]) {
-                const i = cur + dir * d
-                if (i >= 0 && i < this.sections.length
-                    && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2
-                    && this.#isWithinBuffer(i))
-                    return i
-            }
+        for (const i of [cur - 1, cur + 1]) {
+            if (i >= 0 && i < this.sections.length
+                && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
+                return i
         }
         return -1
     }
-    /** 启动/持续全书闲时预排循环（幂等；requestIdleCallback 分步、双 rAF 让帧、周期让出）。 */
+    /** 预排：三窗口下窗口内最多 3 章，逐个加载未排的相邻章，排齐即停。
+     *  无需 idle/分帧调度（工作量极小），仅用 #idlePreload 防重入。 */
     async #tickIdlePreload() {
         if (this.#idlePreload) return
         this.#idlePreload = true
         try {
-            while (!this.#isAnimating && !this.#locked && !document.hidden
-                && !this.#idleWaitRace) {
+            while (!this.#isAnimating && !this.#locked && !document.hidden) {
                 const idx = this.#popNearestPrep()
-                if (idx < 0) break // 全书排完
-                await new Promise(res => {
-                    if (typeof requestIdleCallback === 'function')
-                        requestIdleCallback(res, { timeout: 2000 })
-                    else setTimeout(res, 250)
-                })
+                if (idx < 0) break // 窗口内已排齐
                 await this.#loadSection(idx)
-                // 预排关节：输出本次取到的章节、其排版页数、当前已预排计数
-                try { window.EPUBBridge?.log?.('[prep] 取#' + idx + ' cp=' + (this.#views.get(idx)?.contentPages ?? '?') + ' 已预排=' + this.#prepState.filter(s => s === 2).length + '/' + this.sections.length
-                    + ' | st scroll=' + Math.round(this.#container[this.scrollProp]) + ' rem=' + (Math.round(Math.abs(this.#container[this.scrollProp]) % this.size)) + ' anim=' + this.#isAnimating + ' lock=' + this.#locked + ' pg=' + this.#renderedPage + '/' + this.#renderedPages + ' prio=' + this.#primaryIndex) } catch (_) {}
-                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
             }
         } finally {
             this.#idlePreload = false
-            if (this.#popNearestPrep() >= 0 && !document.hidden && !this.#isAnimating) {
-                // 异步调度下一批，避免尾部递归与原批次重叠
-                setTimeout(() => {
-                    if (!this.#idleWaitRace && !document.hidden && !this.#isAnimating)
-                        this.#tickIdlePreload()
-                }, 80)
-            }
         }
     }
     #scheduleAllPreload() {
         this.#ensurePrepState()
-        this.#idleWaitRace = false
         this.#tickIdlePreload()
     }
     /** 对齐 #prepState 到章节数（EPUB spine 确定，不变）。 */
