@@ -8,6 +8,25 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
+## 近期重构 · 三窗口拼接（readest 方案，替换「叠放驻留」跨章）
+
+> 把跨章从「z-index 叠放驻留 + 切可见」整体替换为 **readest 式三窗口拼接**（flex 行连续长条 + scrollLeft 翻页），
+> 根治此前「多视图拼接 + offset 表 + scrollLeft 补偿」与「叠放驻留」各自的稳定性缺陷；真机快速连翻 55 章无空白/无跳页。
+
+- **核心机制（对齐 readest）**
+  1. **不存 offset 表**：`#getViewOffset(index)` 每次遍历 `#sortedViews` 实时累加各视图实测宽度（`getBoundingClientRect`），
+     从根上绕开旧「offsets 表与 scrollLeft 不同步」「章节宽度异步重排漂移」两个结构性坑。
+  2. **视图按 index `insertBefore` 排成 flex 行**：`#container` 改 `display:flex; flex-direction:row`，相邻章首尾相接。
+  3. **`View.expand()` 去掉官方 `+size×2` 空白缓冲**：视图宽度=纯内容宽 → 跨章无空白页。
+  4. **prepend 锚定补偿**：`#loadAdjacentSection` 在前方插章时记录 `startBefore`，插入后
+     `correction = startBefore + addedSize - renderedStart`，`containerPosition += correction`，视口不乱跳。
+  5. **primary 视图**：`#primaryIndex` + `#detectPrimaryView()`，`page/pages/fraction` 均相对 primary 计算。
+- **翻页**：章内 = scrollLeft + snap（拖动预览实时 scroll，松手 `animated` 时 rAF 缓动；跨章 = 长条连续滚动无缝直达，
+  仅当顶到长条最远端才 `#goToEdge` 加载邻章）。
+- **预排**：`#fillVisibleArea` 保证向有余页 ≥5（向前最多补齐 3 章），主章不足一屏补前章；offsets 实时算、随时可淘汰远端。
+- **保留**：四向独立页边距、封面全屏、单章排版、CFI、样式注入、relocate 进度上报等既有能力。
+- **真机验证**（平板）：打开书、章内连翻、跨章连翻 55 章，relocate 连续推进、章节标题随动、无空白无报错。
+
 ## 近期重构 · 换回官方 foliate-js 作新基座（去拼接污染）
 
 > 由于自研"多窗口拼接 + scrollLeft 补偿"是失败的产物（跨章乱跳、offset 重排、clamp），把 foliate-js 换回**官方原版 johnfactotum/foliate-js**，作为新的干净重构起点。重新迁移回两个我们真正需要的定制：**四向独立页边距**、**封面全屏**。其余（拼接待滑窗/scrollLeft 动画）一律不再引入。
