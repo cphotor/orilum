@@ -2230,15 +2230,11 @@ addEventListener('touchmove', e => {
     }
   }
   // 判定为横向滑动：先关闭栏，锁死方向、阻止默认滚动与点击穿透（仅单指翻页，双指亮度手势不做翻页）
+  // 注意：scrollBy 预览已由 paginator 的 `#onTouchMove` 自动处理，reader 不再重复调用。
+  // 否则 reader 和 paginator 各调一次 scrollBy → 滚动距离翻倍；touchend 双方再各翻一次 → 翻两页。
   if (e.touches.length === 1 && Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
     e.preventDefault()
     hideBars()
-    // 仅动画模式做「拖动两页同屏」的滑动预览；无动画模式仍累计 dx 判定方向，
-    // 松手后 next/prev 由 'animated' 属性缺失而瞬间跳转，实现真正的「无翻页动画」。
-    if (settings.pageAnim) {
-      const r = view.renderer
-      if (r) r.scrollBy(-(x - touch.dx), 0) // 负增量取反：左滑→scrollLeft 增大→露出下一页
-    }
     touch.dx = x
   }
 }, { passive: false })
@@ -2247,19 +2243,14 @@ addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
   // 亮度手势已激活且确实调节了亮度：仅保存亮度，不做翻页/吸附。
-  // 注意：边缘区域被判为亮度手势、但实际是水平滑动时（未触发亮度，lastBright 仍为 null），
-  // 绝不能提前 return，否则缺少 snap/next/prev，小幅滑会卡在“两页之间”无法吸附。
   if (touch.brightGesture && touch.lastBright !== null) {
     saveSettings()
     return
   }
+  // 滑动翻页由 paginator 的 snap() 统一处理（基于拖动基准，不叠加位移）。
+  // 注意：reader 不再调用 r.next()/r.prev()（会强制翻一页，与 snap 叠加→双翻）。
   const r = view.renderer
-  if (!r) return
-  // 单一固定滑动阈值：|dx|<=T → 回弹当前页；|dx|>T → 翻页动画按方向继续。只此一处判断，不做重复半页判定。
-  const SWIPE = 100
-  if (touch.dx <= -SWIPE) r.next()            // 左滑超过阈值 → 前翻（动画继续）
-  else if (touch.dx >= SWIPE) r.prev()        // 右滑超过阈值 → 后翻（动画继续）
-  else r.snap(-touch.vx, -touch.vy)           // 未过阈值 → 回弹当前页
+  if (r) r.snap(-touch.vx, -touch.vy)
 }, { passive: true })
 
 addEventListener('touchcancel', () => {

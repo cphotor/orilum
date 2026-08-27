@@ -524,24 +524,15 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
-    #filling = false              // 邻章预排进行中守卫
     #stabilizing = false          // goTo 稳定期（抑制 onExpand 抢滚动）
     #isAnimating = false          // snap 滚动动画中
     columnCount = 1               // 本项目单栏整屏（每屏一页）
-    #minPagesAhead = 5            // 向前预排的最小余页
-    /** 天顶距：从 primary 起向两端保留的章节距离（超出的远端 forward 会淘汰）。 */
-    #maxViewDistance = 3
-    /* ---- 全书闲时预排 + 驻留池 ----
-     * 预排完成的章节视图以「屏外 parked」方式常驻（position:absolute; left:-9999px，
-     * 同父节点、真实渲染、可测宽，但不占长条布局/不妨碍 offsets）。翻到某章时才 unpark
-     * 装回长条两端。闲时 requestIdleCallback 逐章预排，按 |距当前章| 升序、同距正方向(后)先。 */
+    /* ---- 全书长带 + 闲时预排 ----
+     * 所有预排完成的章节视图都拼入同一横向长条（flex row），按章节顺序首尾相接，
+     * 不做 parked 装卸，不淘汰远章节，永久驻留 DOM 和排版。闲时 requestIdleCallback
+     * 逐章预排，按 |距当前章| 升序、同距正方向(后)先。 */
     #idlePreload = false               // 预排循环守卫（同一时刻只跑一个空闲预排循环）
     #idleWaitRace = null               // 标记本次预排批次是否已被翻页打断（true=应尽快让出）
-    #idleBatchBusy = 0                 // 当前批量内已排章数，用于周期让出合成器
-    /** 可滚动长条（参与 flex，不 parked）的视图相对 primary 的半径（primary±k）。k=1 即“恒 3 章”。 */
-    stripRadius = 1
-    /** 是否已对整个 book 排过一次（避免反复重建待排全集；只是信号，实际遍历总是从中取）。 */
-    #allScheduled = false
     /* 每章预排状态数组：长度 = this.sections.length（EPUB spine 章节数，解析时确定）。
      * 0 = 未排（待处理），2 = 已排完（已 `#loadSection` 成功并入 #views；失败也置 2 以免反复重试）。
      * 供 #popNearestPrep 用 O(1) 判定"该章排完没"，替代对 #views 的全书扫描。 */
@@ -661,8 +652,24 @@ export class Paginator extends HTMLElement {
         this.#footer = this.#root.getElementById('footer')
 
         this.#observer.observe(this.#container)
+        // [诊断] 瞬时位置巡检：仅当「非动画下 scroll 离开整页 >4px」时打印现场。
+        // 用于区分「跳」到底是真实 scroll 位移（真停在两页之间）还是纯渲染合成错位（scroll 全程不动）。
+        {
+            let jsz = this.size || 1, jn = 0
+            const jtick = () => {
+                if (++jn % 60 === 0) jsz = this.size || 1
+                const sc = this.#container[this.scrollProp]
+                const rem = Math.abs(sc % jsz)
+                if (rem > 4) {
+                    try { window.EPUBBridge?.log?.('[Jwatch] scroll=' + Math.round(sc) + ' rem=' + Math.round(rem) + ' anim=' + this.#isAnimating + ' prio=' + this.#primaryIndex + ' prep=' + this.#prepState.filter(s => s === 2).length) } catch (_) {}
+                }
+                requestAnimationFrame(jtick)
+            }
+            requestAnimationFrame(jtick)
+        }
         this.#container.addEventListener('scroll', () => {
             if (!this.#isAnimating) this.dispatchEvent(new Event('scroll'))
+            try { window.EPUBBridge?.log?.('[scr] scrollEvent primary=' + this.#primaryIndex + ' vo=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' animating=' + this.#isAnimating) } catch (_) {}
         })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.#justAnchored) this.#justAnchored = false
@@ -790,7 +797,6 @@ export class Paginator extends HTMLElement {
     #getViewOffset(index) {
         let offset = 0
         for (const [i, view] of this.#sortedViews) {
-            if (this.#isParked(view)) continue // parked 不占长条、不计偏移
             if (i === index) return offset
             offset += view.element.getBoundingClientRect()[this.sideProp]
         }
@@ -806,7 +812,6 @@ export class Paginator extends HTMLElement {
         const visibleStart = this.#renderedStart
         let offset = 0
         for (const [index, view] of this.#sortedViews) {
-            if (this.#isParked(view)) continue
             const viewSize = view.element.getBoundingClientRect()[this.sideProp]
             if (visibleStart < offset + viewSize - 1) {
                 if (index !== this.#primaryIndex) this.#primaryIndex = index
@@ -815,19 +820,22 @@ export class Paginator extends HTMLElement {
             offset += viewSize
         }
     }
-    /** 创建章节视图并入池，初始为「屏外 parked」。parked=绝对/固定定位移出视口但真实渲染、
-     *  同父节点、可测宽、不占长条布局；翻到该章时才 unpark 装回长条两端。 */
+    /** 创建章节视图并入池，初始保持 `display: none`，加载完成后显示并装配。
+     *  所有章节按顺序拼入同一横向 flex 长条，不做 parked 装卸。 */
     #buildView(index) {
         const view = new View({
             container: this,
             onExpand: () => {
-                if (this.#filling || this.#stabilizing) return
+                if (this.#stabilizing) return
                 if (this.#primaryIndex === index) this.#scrollToAnchor(this.#anchor)
             },
         })
         view.index = index
-        // 初始即 parked：移出视口、真实渲染，等待被窗口装卸
-        this.#setParked(view, true)
+        // 初始屏外渲染（position:fixed; left:-9999px），保持布局计算但不可见，
+        // 加载完成后转为 relative 进入 flex 流。不能用 display:none（expand 拿不到布局尺寸）。
+        Object.assign(view.element.style, {
+            position: 'fixed', left: '-9999px', top: '0',
+        })
         this.#views.set(index, view)
         const sorted = this.#sortedViews
         const myPos = sorted.findIndex(([i]) => i === index)
@@ -836,64 +844,9 @@ export class Paginator extends HTMLElement {
         else this.#container.append(view.element)
         return view
     }
-    /** 兼容别名：#loadAdjacentSection/#goTo 里“新建并入池”。 */
+    /** 兼容别名：#goTo 里“新建并入池”。 */
     #createView(index) {
         return this.#buildView(index)
-    }
-    #isParked(view) {
-        return view && (view.element.style.position === 'fixed'
-            || view.element.style.position === 'absolute')
-            && view.element.style.left === '-9999px'
-    }
-    /** 卸下：把章节移出长条 → 屏外 parked（保留排版，不重载 iframe、不占 offsets/布局）。
-     *  只改 position/left，绝不改 width/height —— 宽度保留 View.expand 算好的多屏宽(pageCount×屏宽)。 */
-    #parkView(view) {
-        if (!view) return
-        Object.assign(view.element.style, {
-            position: 'fixed', left: '-9999px', top: '0',
-        })
-    }
-    /** 装回：把 parked 章节恢复为长条内可见（参与 flex 布局），并按当前排版重排一次。
-     *  重排确保屏外 parked 的 iframe 回到 relative 布局后内容正确渲染（否则可能空白/拉不出）。
-     *  此路径仅在窗口切换（#syncStrip，stabilizing 期间）调用，onExpand 被 stabilizing 挡住，不会递归 scroll。 */
-    #unparkView(view) {
-        if (!view) return
-        Object.assign(view.element.style, {
-            position: 'relative', left: 'auto', top: 'auto',
-        })
-        if (view.document && this.#lastLayout && !this.#filling)
-            view.render(this.#lastLayout)
-    }
-    #setParked(view, parked) {
-        if (parked) this.#parkView(view)
-        else this.#unparkView(view)
-        return view
-    }
-    /** 当前可滚动长条应包含的章节 index 集（primary±stripRadius，存在且 linear!=no）。 */
-    #stripIndices() {
-        const set = new Set([this.#primaryIndex])
-        for (let d = 1; d <= this.stripRadius; d++) {
-            for (const dir of [-1, 1]) {
-                const i = this.#primaryIndex + dir * d
-                if (this.#canGoToIndex(i) && this.sections[i]?.linear !== 'no') set.add(i)
-            }
-        }
-        return set
-    }
-    /** 依据 primary 装卸长条：非窗口(primary±k)章 park（卸下），窗口章若已排则 unpark（装回）。
-     *  只负责可见性，不自动改 scroll（由调用方锚定）。 */
-    #syncStrip() {
-        const want = this.#stripIndices()
-        for (const [index, view] of [...this.#views]) {
-            const inWindow = want.has(index)
-            if (inWindow && this.#isParked(view)) {
-                this.#unparkView(view)
-                try { window.EPUBBridge?.log?.('[#up] unpark idx=' + index + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' prio=' + this.#primaryIndex + ' strip=' + JSON.stringify([...want])) } catch (_) {}
-            } else if (!inWindow && !this.#isParked(view)) {
-                this.#parkView(view)
-                try { window.EPUBBridge?.log?.('[#pk] park   idx=' + index + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' prio=' + this.#primaryIndex + ' strip=' + JSON.stringify([...want])) } catch (_) {}
-            }
-        }
     }
     #destroyView(index) {
         const view = this.#views.get(index)
@@ -901,26 +854,20 @@ export class Paginator extends HTMLElement {
         try {
             const st = (new Error()).stack?.split('\n').slice(1, 4).join('|') ?? ''
             window.EPUBBridge?.log?.('[dx] destroy idx=' + index + ' cp=' + (view.contentPages ?? '?')
-                + ' parked=' + this.#isParked(view) + ' caller=' + st)
+                + ' caller=' + st)
         } catch (_) {}
         view.destroy()
         view.element.remove()
         this.#views.delete(index)
         this.sections[index]?.unload?.()
     }
-    /** 卸载远离窗口的章节（委托 #syncStrip：非 primary±stripRadius 章 park 卸下，不销毁、保留排版）。 */
-    #trimDistantViews() {
-        this.#syncStrip()
-    }
     #snap(label) {
         try {
             const rip = [], pd = []
             const sz = this.size || 0
             for (const [i, v] of this.#sortedViews) {
-                if (!this.#isParked(v)) {
-                    const w = Math.round(v.element.getBoundingClientRect()[this.sideProp])
-                    rip.push(i + ':cp' + (v.contentPages ?? '?') + ':w' + w + ((sz && w) ? '(' + Math.round(w / sz) + '屏)' : ''))
-                }
+                const w = Math.round(v.element.getBoundingClientRect()[this.sideProp])
+                rip.push(i + ':cp' + (v.contentPages ?? '?') + ':w' + w + ((sz && w) ? '(' + Math.round(w / sz) + '屏)' : ''))
                 if (this.#prepState[i] === 2) pd.push(i)
             }
             const cp = this.#primaryView?.contentPages ?? 0
@@ -942,25 +889,18 @@ export class Paginator extends HTMLElement {
             after.textContent = s
         } else after.textContent = this.#styles
     }
-    /** 加载并排版一对邻章（index 不在长条内才执行）。prepend（插到当前最前视图上方）
-     *  时用锚定补偿校正滚动位，避免插入后视口乱跳。 */
-    async #loadSection(index, { hidden }) {
+    /** 加载并排版一章。排完即拼入全书长条（flex row），不做 parked 装卸。 */
+    async #loadSection(index) {
         if (!this.#canGoToIndex(index)) return
         const section = this.sections[index]
         if (!section || section.linear === 'no') return
-        // 已在池中：若需显示且当前 parked → 装回（unpark）；预排命中(parked)则直返
+        // 已在池中（已排好，已在长条中）→ 直接返回
         let view = this.#views.get(index)
         if (view?.document?.body) {
-            if (!hidden && this.#isParked(view)) {
-                const firstIndex = this.#sortedViews[0]?.[0]
-                const isPrepend = firstIndex != null && index < firstIndex
-                this.#unparkView(view)
-                if (isPrepend) this.#compensatePrepend(view)
-            }
-            this.#markPrepared(index) // 缓存命中=已排完，标记避免被预排循环再取
+            this.#markPrepared(index)
             return view
         }
-        view = this.#buildView(index) // 初始 parked
+        view = this.#buildView(index) // 初始 display:none
         const afterLoad = doc => {
             if (index === 0 && isCoverLike(doc)) {
                 view.isCover = true
@@ -995,21 +935,15 @@ export class Paginator extends HTMLElement {
             this.#destroyView(index)
             return
         }
-        // 拼接进长条：只要该章属于“当前窗口(primary±stripRadius)”就立即装配（排完就拼），
-        // 使打开书后前后章随预排从 1 章长成 3 章的三窗口；窗口外章保持 parked 缓存。
-        // 向后拼=append（无补偿）；向前拼=prepend（左侧扩张，需锚定补偿）。
-        const inWindow = this.#stripIndices().has(index)
-        try { window.EPUBBridge?.log?.('[asb] idx=' + index + ' hidden=' + hidden + ' inW=' + inWindow + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' start=' + Math.round(this.#renderedStart) + ' strip=' + JSON.stringify([...this.#stripIndices()])) } catch (_) {}
-        if (!hidden || inWindow) {
-            const wasParked = this.#isParked(view)
-            const hasBefore = [...this.#views].some(([i, v]) => !this.#isParked(v) && i < index)
-            this.#unparkView(view)
-            const afterStart = this.#renderedStart
-            const afterVO = this.#getViewOffset(this.#primaryIndex)
-            try { window.EPUBBridge?.log?.('[asb] pack idx=' + index + ' wasP=' + wasParked + ' hasBefore=' + hasBefore + ' startAftUn' + Math.round(afterStart) + ' voPAft=' + Math.round(afterVO) + ' viewW=' + Math.round(view.element.getBoundingClientRect()[this.sideProp])) } catch (_) {}
-            if (wasParked && !hasBefore && index !== this.#primaryIndex)
-                this.#compensatePrepend(view)
-        }
+        // 排完即拼入长条：从屏外 fixed 转为 relative → 进入 flex 布局
+        Object.assign(view.element.style, {
+            position: 'relative', left: 'auto', top: 'auto',
+        })
+        // 若该章排在所有已装配视图之前（prepend），需锚定补偿
+        const hasBefore = [...this.#views].some(([i]) => i < index)
+        try { window.EPUBBridge?.log?.('[asb] idx=' + index + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' start=' + Math.round(this.#renderedStart) + ' hasBefore=' + hasBefore) } catch (_) {}
+        if (!hasBefore && index !== this.#primaryIndex)
+            this.#compensatePrepend(view)
         this.#markPrepared(index)
         this.dispatchEvent(new CustomEvent('create-overlayer', {
             detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
@@ -1029,10 +963,6 @@ export class Paginator extends HTMLElement {
                 this.atStart ? 0 : this.size, this.atEnd ? 0 : this.size]
         }
         try { window.EPUBBridge?.log?.('[cmp] startBefore=' + Math.round(startBefore) + ' addedSize=' + Math.round(addedSize) + ' correction=' + Math.round(correction) + ' apply=' + (Math.abs(correction) > 0.5) + ' scrollNow=' + Math.round(this.#container[this.scrollProp]) + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' sb=' + JSON.stringify(this.#scrollBounds?.map(v => Math.round(v)))) } catch (_) {}
-    }
-    /** 兼容旧调用：显示路径（跨章时确保目标章装回长条）。 */
-    #loadAdjacentSection(index) {
-        return this.#loadSection(index, { hidden: false })
     }
     /** 取下一个待预排章节：按 |距当前章| 升序，同距正方向(后)先；用 #prepState[i]!==2 判"未排"；无则 -1。 */
     #popNearestPrep() {
@@ -1062,12 +992,11 @@ export class Paginator extends HTMLElement {
                         requestIdleCallback(res, { timeout: 2000 })
                     else setTimeout(res, 250)
                 })
-                await this.#loadSection(idx, { hidden: true })
+                await this.#loadSection(idx)
                 // 预排关节：输出本次取到的章节、其排版页数、当前已预排计数
-                try { window.EPUBBridge?.log?.('[prep] 取#' + idx + ' cp=' + (this.#views.get(idx)?.contentPages ?? '?') + ' 已预排=' + this.#prepState.filter(s => s === 2).length + '/' + this.sections.length) } catch (_) {}
+                try { window.EPUBBridge?.log?.('[prep] 取#' + idx + ' cp=' + (this.#views.get(idx)?.contentPages ?? '?') + ' 已预排=' + this.#prepState.filter(s => s === 2).length + '/' + this.sections.length
+                    + ' | st scroll=' + Math.round(this.#container[this.scrollProp]) + ' rem=' + (Math.round(Math.abs(this.#container[this.scrollProp]) % this.size)) + ' anim=' + this.#isAnimating + ' lock=' + this.#locked + ' pg=' + this.#renderedPage + '/' + this.#renderedPages + ' prio=' + this.#primaryIndex) } catch (_) {}
                 await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
-                this.#idleBatchBusy++
-                if (this.#idleBatchBusy >= 12) { this.#idleBatchBusy = 0; break }
             }
         } finally {
             this.#idlePreload = false
@@ -1083,7 +1012,6 @@ export class Paginator extends HTMLElement {
     #scheduleAllPreload() {
         this.#ensurePrepState()
         this.#idleWaitRace = false
-        this.#allScheduled = true
         this.#tickIdlePreload()
     }
     /** 对齐 #prepState 到章节数（EPUB spine 确定，不变）。 */
@@ -1095,29 +1023,21 @@ export class Paginator extends HTMLElement {
     #markPrepared(index) {
         if (index >= 0 && index < this.#prepState.length) this.#prepState[index] = 2
     }
-    /** 预排：保证向前的余页 ≥ #minPagesAhead，主章过短时补前章以填开篇列。 */
-    async #fillVisibleArea() {
-        // 确保窗口内邻章已就绪（未排则在后台排好，翻到时直接装回），并推进全书闲时预排
-        for (const idx of this.#stripIndices())
-            if (!this.#views.has(idx)) this.#loadAdjacentSection(idx) // fire-and-forget 后台排
-        this.#scheduleAllPreload()
-    }
     /** 渲染所有已排版视图为同一新 layout（resize / 设置变更时）。offsets 从 DOM 实时算，重排后重锚定。 */
     render() {
         if (this.#views.size === 0) return
+        try { window.EPUBBridge?.log?.('[ren] ENTER primary=' + this.#primaryIndex + ' vo=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' anchor=' + (this.#anchor ? 'yes' : 'null') + ' total=' + this.#views.size) } catch (_) {}
         const layout = this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
         })
         this.#stabilizing = true
         for (const [, view] of this.#views) {
-            // 只重排可见长条内的章；parked 预排章保持旧排版，翻到(装回)时 #unparkView 再按新参数重排，
-            // 避免「书末调字号 → 重排整本缓存」的卡顿
-            if (this.#isParked(view)) continue
             if (view.document) view.render(layout)
         }
         this.#stabilizing = false
         this.#scrollToAnchor(this.#anchor)
+        try { window.EPUBBridge?.log?.('[ren] DONE  primary=' + this.#primaryIndex + ' vo=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' scroll=' + Math.round(this.#container[this.scrollProp])) } catch (_) {}
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
@@ -1231,7 +1151,6 @@ export class Paginator extends HTMLElement {
         if (this.#views.size === 0) return 0
         let total = 0
         for (const [, view] of this.#views) {
-            if (this.#isParked(view)) continue // parked 不占长条
             total += view.element.getBoundingClientRect()[this.sideProp]
         }
         return total
@@ -1276,20 +1195,28 @@ export class Paginator extends HTMLElement {
         try { window.EPUBBridge?.log?.('[drg] dx=' + Math.round(dx) + ' d=' + Math.round(delta) + ' sb=[' + Math.round(offset) + ',' + Math.round(a) + ',' + Math.round(b) + '] clamp=[' + Math.round(min) + ',' + Math.round(max) + '] scroll=' + Math.round(this.#container[scrollProp]) + ' start=' + Math.round(this.#renderedStart) + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' prio=' + this.#primaryIndex) } catch (_) {}
     }
     snap(vx, vy) {
-        const velocity = this.#vertical ? vy : vx
         if (!this.#scrollBounds) return
-        const [offset, a, b] = this.#scrollBounds
-        const { size } = this
-        const min = Math.abs(offset) - a
-        const max = Math.abs(offset) + b
-        const d = velocity * (this.#rtl ? -size : size)
-        const page = Math.floor(
-            Math.max(min, Math.min(max, (this.#renderedStart + this.#renderedEnd) / 2
-                + (isNaN(d) ? 0 : d))) / size)
+        const size = this.size
+        // 双翻修复：目标页基于「拖动前的静止基准」#scrollBounds[0]，一次手势至多翻一页。
+        // 拖动手势 scrollBy 已把位置推进到预览页，若再用当前 position 叠加速度计算，
+        // 会把「预览已推进的一页」又叠一次 → 翻两页。
+        const rest0 = this.#scrollBounds[0]
+        const delta = this.containerPosition - rest0
+        const THRESH = size / 2
+        let dir
+        if (Math.abs(delta) > THRESH) dir = delta > 0 ? 1 : -1
+        else {
+            const velocity = this.#vertical ? vy : vx
+            dir = velocity > 0 ? 1 : velocity < 0 ? -1 : 0
+        }
+        if (!dir) return this.#scrollToPage(Math.round(rest0 / size), 'snap')
+        // 目标 = 拖动前静止整页 + dir（仅一次，不叠加位移）
+        const target = Math.round(rest0 / size) + dir
         // 越界：直接去相邻章（从对应边缘起）
-        const dir = page < 0 ? -1 : page >= this.#renderedPages ? 1 : null
-        if (dir) return this.#goToEdge(dir)
-        return this.#scrollToPage(page, 'snap')
+        const pages = this.#renderedPages
+        if (target < 0) return this.#goToEdge(-1)
+        if (target >= pages) return this.#goToEdge(1)
+        return this.#scrollToPage(target, 'snap')
     }
     #onTouchStart(e) {
         const touch = e.changedTouches[0]
@@ -1304,8 +1231,7 @@ export class Paginator extends HTMLElement {
                 ' scroll=' + Math.round(this.#container[this.scrollProp]) +
                 ' renderedPage=' + this.#renderedPage + ' pagesBeforePri=' + this.#getPagesBeforeView(this.#primaryIndex) +
                 ' cp=' + (pv?.contentPages ?? '?') + ' size=' + Math.round(this.size) +
-                ' sb=' + JSON.stringify(this.#scrollBounds?.map(v => Math.round(v))) +
-                ' strip=' + JSON.stringify([...this.#stripIndices()]))
+                ' sb=' + JSON.stringify(this.#scrollBounds?.map(v => Math.round(v))))
         } catch (_) {}
     }
     #onTouchMove(e) {
@@ -1366,7 +1292,7 @@ export class Paginator extends HTMLElement {
         const containerOffset = viewOffset + localOffset
         return this.#scrollToPage(Math.floor(containerOffset / this.size + 0.01), reason)
     }
-    async #scrollTo(offset, reason, smooth) {
+    async #scrollTo(offset, reason, smooth = true) {
         const element = this.#container
         const { scrollProp, size } = this
         const apply = o => {
@@ -1383,8 +1309,14 @@ export class Paginator extends HTMLElement {
             const from = element[scrollProp]
             try { window.EPUBBridge?.log?.('[sc] ' + reason + ' primary=' + this.#primaryIndex + ' scroll ' + Math.round(from) + '→' + Math.round(offset) + ' (Δ' + Math.round(offset - from) + ') cp=' + (this.#primaryView?.contentPages ?? '?')) } catch (_) {}
             this.#isAnimating = true
-            await animate(from, offset, 260, easeOutQuad, x => { element[scrollProp] = x })
-            this.#isAnimating = false
+            try {
+                await animate(from, offset, 260, easeOutQuad, x => { element[scrollProp] = x })
+            } catch (e) {
+                // 动画被打断/抛错：记录现场，防止 #isAnimating 泄漏成"永久锁死、交互全失效"
+                try { window.EPUBBridge?.log?.('[sc] animate ERR reason=' + reason + ' ' + (e?.stack ?? e)) } catch (_) {}
+            } finally {
+                this.#isAnimating = false
+            }
             apply(offset)
         } else apply(offset)
         this.#afterScroll(reason)
@@ -1525,8 +1457,11 @@ export class Paginator extends HTMLElement {
         const hasFocus = this.#primaryView?.document?.hasFocus()
         this.#primaryIndex = index
         this.#markPrepared(index) // #goTo 直接加载的章也标记预排状态，避免被预排循环重复取到
-        try { window.EPUBBridge?.log?.('[#go] idx=' + index + ' vo=' + Math.round(this.#getViewOffset(index)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' cp=' + (this.#views.get(index)?.contentPages ?? '?') + ' strip=' + JSON.stringify([...this.#stripIndices()])) } catch (_) {}
-        this.#trimDistantViews()
+        try { window.EPUBBridge?.log?.('[#go] idx=' + index + ' vo=' + Math.round(this.#getViewOffset(index)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' cp=' + (this.#views.get(index)?.contentPages ?? '?')) } catch (_) {}
+        // #goTo 加载的视图初始 position:fixed，现转为 relative 进入 flex 长条
+        Object.assign(view.element.style, {
+            position: 'relative', left: 'auto', top: 'auto',
+        })
         const primaryView = this.#primaryView
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
@@ -1589,22 +1524,11 @@ export class Paginator extends HTMLElement {
         for (let index = fromIndex + dir; this.#canGoToIndex(index); index += dir)
             if (this.sections[index]?.linear !== 'no') return index
     }
-    /** 跨章：从条带边缘跳到相邻章节。目标章若已预排则复用、无空白（首尾相接），否则即时加载。 */
+    /** 跨章：从当前长条边缘跳到相邻章节。所有视图已全部拼入 flex 长条，直接取首尾。 */
     #goToEdge(dir) {
-        // 边缘 = 当前长条内（非 parked，仍参与 flex）最左/最右的章，而非已预排全书章的极值
-        // 否则跨章会一次跳到很远的已预排章（日志里 291→337 即此因）。
         const sorted = this.#sortedViews
-        let edgeIndex = null
-        if (dir < 0) {
-            for (const [idx, v] of sorted)
-                if (!this.#isParked(v)) { edgeIndex = idx; break }
-        } else {
-            for (let k = sorted.length - 1; k >= 0; k--) {
-                const [idx, v] = sorted[k]
-                if (!this.#isParked(v)) { edgeIndex = idx; break }
-            }
-        }
-        if (edgeIndex == null) edgeIndex = this.#primaryIndex
+        const edgeIndex = dir < 0 ? sorted[0]?.[0] : sorted[sorted.length - 1]?.[0]
+        if (edgeIndex == null) return
         const idx = this.#adjacentIndex(dir, edgeIndex)
         if (idx == null) return
         return this.#goTo({

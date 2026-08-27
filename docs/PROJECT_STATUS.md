@@ -8,28 +8,44 @@
 > `foliate-js 渲染 + 自建 Kotlin 数据层` 主链路已闭环：SAF 选书 → 解析 → 渲染 → 翻页 → 进度存读 → 目录 → 设置面板 → 字体。
 > 当前正推进「样式系统（UI 常驻控件层）」，见下方「样式系统 · 工程进度」。
 
-## 近期重构 · 全书闲时预排 + 驻留装卸（长条恒 3 章）
+## 近期重构 · 全书长带（替代 parked 装卸）
 
-> 在三窗口拼接基础上，改为「**全书闲时异步预排 + 章节屏外驻留 + 翻到两端装卸**」：
-> 预排完成的章节以 `position:fixed;left:-9999px`（屏外 parked，同父节点、真实渲染、不占长条）常驻，
-> 翻到某章才装卸回长条两端；长条只露当前章 ±1。据此解决「书末/长读后调字号重排整本缓存」的卡顿。
+> 因 `position:fixed;left:-9999px` 屏外驻留的 iframe 合成层导致 WebView 合成线程积压，出现"屏幕跳到两页之间卡死"的视觉错位。
+> 改为 **全书长带方案**（参考 readest）：所有预排章节直接拼入 flex 长条，不做 parked 装卸，不淘汰远章节，永久驻留 DOM。
 
-- **闲时全书预排**：`requestIdleCallback` 分步（降级 `setTimeout`）、按 |距当前章| 升序、同距正方向(后)先，
-  串行每排一章后双 rAF 让帧、每 12 章让出一批；翻页动画中 / `document.hidden` / `#locked` 时暂停让位。
-- **屏外 parked 驻留**：预排视图 `position:fixed; left:-9999px` 挂同一 parent（不重载 iframe、可测宽、不占长条/offsets），
-  是"卸下缓存"，区别于旧的 `destroy` 重排。
-- **两端装卸**：`#loadAdjacentSection`→`#loadSection(index,{hidden})`；装回=unpark（不改父、不复重排，
-  直接复用排版），左端装回带 prepend 锚定补偿；长条只含 primary±1。
-- **调字号只重排可见章**：`render()` 跳过 parked 视图（只重排 inStrip），避免书末调字号重排整本缓存。
-- **保留**：offset 实时 DOM 累加、跨章无缝滚动、prepend 锚定补偿、`#getViewOffset`/`#renderedViewSize`/`#detectPrimaryView` 跳过 parked。
-- **每章预排状态数组**：`#prepState`（长度=`sections.length`=EPUB spine 章数，解析时确定）；0=未排 / 2=已排完，
-  `#popNearestPrep` 以其 O(1) 判定"排完没"并取下一个待排章；`#loadSection`/`#goTo` 加载后 `#markPrepared` 标记，失败也置 2 防重试风暴。
-- **真机验证**：连翻 55+ 章、前翻后翻无空白/无跳页/无 JS 报错；修复一次 `Maximum call stack`（装回时多余重排导致的链）后稳定。
-- **修复·跨章乱跳（201→400+）**：`#goToEdge` 原用 `#sortedViews` 全量（含全部 parked 预排章）的极值作为长条边缘，
-  导致一次跨章跳到很远章。改为取**长条内（非 parked）实际边缘章**后，relocate 逐章推进（273→284）无跳变。
-- **修复·每章只有首页、一翻就到下一章**：`#park/unparkView` 原把 `width:100%` 覆盖了 `View.expand()` 算好的多屏宽
-  （pageCount×屏宽），使每章只剩 1 屏。改为装卸只改 `position/left`、**绝不改 width/height** 后，章内 fraction 多屏递增、
-  index 仅在章末 +1。
+- **全书长带**：`#buildView` 初始 `position:fixed;left:-9999px`（保持布局计算但不显示），加载完成后转为 `position:relative` 进入 flex 流。
+- **移除 parked 机制**：删除 `#isParked`/`#parkView`/`#unparkView`/`#setParked`/`#stripIndices`/`#syncStrip`/`#trimDistantViews`/`stripRadius`/`#filling` 等字段和方法。
+- **`#render()` 重排所有视图**：不再跳过 parked 视图，调字号/边距时全书已排章节统一重排（用户操作频率低，不影响体验）。
+- **`#getViewOffset`/`#detectPrimaryView`/`#renderedViewSize`**：不再跳过 parked 视图，所有已排章节参与偏移量计算。
+- **`#goToEdge` 取首尾极值**：所有视图已拼入长条，直接取 `#sortedViews` 首尾作为边缘。
+- **`#loadSection` 简化**：不再接收 `{ hidden }` 参数，排完即显示并装配，prepend 时锚定补偿。
+- **`#goTo` 加载后显示**：`#createView` 加载完后视图从 `position:fixed` 转为 `relative` 进入 flex 流。
+- **修复 `#allScheduled` 语法错误**：移除字段声明时也清除了 `#scheduleAllPreload` 中的引用，避免 JS 私有字段未声明错误。
+
+## 修复 · 长距离滑动翻两页（双翻修复）
+
+> reader.html 和 paginator.js 双方都在处理同一组 touch 事件，导致双重翻页：
+> touchmove 各调一次 scrollBy → 滚动距离翻倍；touchend 各翻一次 → 翻两页。
+
+### 根因
+
+1. **`touchmove` 双 scrollBy**：reader.html 的 `r.scrollBy()` 和 paginator 的 `#onTouchMove` → `scrollBy()` 为同一手指位移各调一次，滚动距离翻倍。
+2. **`touchend` 双翻页**：reader.html 的 `r.next()/r.snap()` 和 paginator 的 `#onTouchEnd` → `snap()` 各翻一次，总计翻两页。
+3. **snap 叠加位移**：`snap()` 基于当前滚动位置 + 速度计算目标页。touchmove 期间 `scrollBy` 已把位置推进到预览页，snap 再用已推进的位置叠加速度，等于把"预览已推进的一页"又算了一次 → 翻两页。
+
+### 修复方案
+
+**reader.html**（`touchmove` / `touchend`）：
+- 移除 `touchmove` 中的 `r.scrollBy()` 调用，scrollBy 预览由 paginator 的 `#onTouchMove` 统一处理。
+- `touchend` 只保留 `r.snap()`（调用 paginator 的统一 snap 逻辑），不再调用 `r.next()/r.prev()`（强制翻一页，与 snap 叠加→双翻）。
+- 点触翻页仍走 `zone-l/zone-r` 的 click 事件，不受影响。
+- 亮度手势仍留在 reader.html 处理。
+
+**paginator.js**（`snap()`）：
+- 目标页基于**拖动前的静止基准** `#scrollBounds[0]`，不是当前位置。
+- 拖动距离超过半屏 → 按位移方向翻一页；否则按速度方向翻一页（或回弹当前页）。
+- 目标 = `Math.round(rest0 / size) + dir`，一次手势至多翻一页，不叠加位移。
+- 参考历史提交 `6390a7c`（`fix(paginator): prevent double page turn on large swipes`）。
 
 ## 近期重构 · 三窗口拼接（readest 方案，替换「叠放驻留」跨章）
 
