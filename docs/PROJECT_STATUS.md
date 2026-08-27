@@ -194,7 +194,7 @@
 ---
 
 ## 关键决策录
-- 渲染只交给 foliate-js，解析/定位/持久化/动画/字体分层全在 Kotlin。
+- 渲染与翻页动画交给 foliate-js/reader（JS 侧：`#scrollTo` 的 rAF 缓动、reader 的跟手 scrollBy）；解析/定位/持久化/字体解析分层在 Kotlin。
 - ES Module / fetch 跨域 → `WebViewAssetLoader` 走 https 虚拟域，不用 `file://`。
 - 定位以「章节 + 章内偏移/比例」与 CFI 兼容为主，进度直接来自 foliate `relocate`。
 - 书源存应用私有目录副本（导入即拷进 `filesDir/books/`），不长期依赖 SAF content://（重启授权不可靠）。
