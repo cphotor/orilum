@@ -2196,6 +2196,9 @@ addEventListener('touchstart', e => {
     time: e.timeStamp, dx: 0, lastX: t.clientX, lastY: t.clientY, vx: 0, vy: 0, active: true,
     brightGesture: isBright, brightBase: null, lastBright: null,
   }
+  // 本次触摸由 reader 全权处理（跟手 scrollBy + snap）；paginator 的自身 touch 处理据此短路，避免双处理。
+  const rr = view?.renderer
+  if (rr) rr._readerDrag = true
 }, { passive: true })
 
 addEventListener('touchmove', e => {
@@ -2230,11 +2233,13 @@ addEventListener('touchmove', e => {
     }
   }
   // 判定为横向滑动：先关闭栏，锁死方向、阻止默认滚动与点击穿透（仅单指翻页，双指亮度手势不做翻页）
-  // 注意：scrollBy 预览已由 paginator 的 `#onTouchMove` 自动处理，reader 不再重复调用。
-  // 否则 reader 和 paginator 各调一次 scrollBy → 滚动距离翻倍；touchend 双方再各翻一次 → 翻两页。
+  // 跟手预览：scrollBy 实时露出相邻页（滑动中两页同屏）。负增量取反：左滑 → scrollLeft 增大 → 露出下一页。
+  // paginator 的 #onTouchMove 已被 _readerDrag 短路，跟手只由本处驱动，避免双调 scrollBy → 距离翻倍。
   if (e.touches.length === 1 && Math.abs(x) > Math.abs(y) && Math.abs(x) > 2) {
     e.preventDefault()
     hideBars()
+    const r = view.renderer
+    if (r) r.scrollBy(-(x - touch.dx), 0)
     touch.dx = x
   }
 }, { passive: false })
@@ -2242,6 +2247,9 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', e => {
   if (!touch.active) return
   touch.active = false
+  const r = view.renderer
+  // 触摸结束：解除 paginator 的短路标记，恢复其自身触摸处理能力。
+  if (r) r._readerDrag = false
   // 亮度手势已激活且确实调节了亮度：仅保存亮度，不做翻页/吸附。
   if (touch.brightGesture && touch.lastBright !== null) {
     saveSettings()
@@ -2249,12 +2257,14 @@ addEventListener('touchend', e => {
   }
   // 滑动翻页由 paginator 的 snap() 统一处理（基于拖动基准，不叠加位移）。
   // 注意：reader 不再调用 r.next()/r.prev()（会强制翻一页，与 snap 叠加→双翻）。
-  const r = view.renderer
   if (r) r.snap(-touch.vx, -touch.vy)
 }, { passive: true })
 
 addEventListener('touchcancel', () => {
   touch.active = false
+  // 触摸被打断也解除短路标记，防止 _readerDrag 永久泄漏（paginator 触摸能力被长置失效）。
+  const rr = view?.renderer
+  if (rr) rr._readerDrag = false
 }, { passive: true })
 
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）

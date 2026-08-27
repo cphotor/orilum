@@ -1219,6 +1219,9 @@ export class Paginator extends HTMLElement {
         return this.#scrollToPage(target, 'snap')
     }
     #onTouchStart(e) {
+        // 触摸由 reader.html（宿主窗口）全权处理跟手 scrollBy + snap 时短路，避免与自身双处理
+        // （双调 scrollBy → 距离翻倍；双 snap → 翻两页）。
+        if (this._readerDrag) return
         const touch = e.changedTouches[0]
         this.#touchState = {
             x: touch?.screenX, y: touch?.screenY,
@@ -1235,6 +1238,7 @@ export class Paginator extends HTMLElement {
         } catch (_) {}
     }
     #onTouchMove(e) {
+        if (this._readerDrag) return
         const state = this.#touchState
         if (state.pinched) return
         state.pinched = globalThis.visualViewport.scale > 1
@@ -1261,6 +1265,7 @@ export class Paginator extends HTMLElement {
         if (horiz > 10 && horiz > vert) this.scrollBy(dx, 0)
     }
     #onTouchEnd() {
+        if (this._readerDrag) return
         this.#touchScrolled = false
         const vx = this.#touchState?.vx ?? 0
         requestAnimationFrame(() => {
