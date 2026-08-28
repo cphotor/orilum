@@ -175,10 +175,19 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             OrilumTheme {
-                // 视图三态：窗格(封面网格) → 带图列表 → 纯文本列表，循环切换。
-                var view by rememberSaveable { mutableStateOf(ShelfView.TextList) }
-                // 排序：加入时间 / 阅读时间 / 书名。
-                var sortName by rememberSaveable { mutableStateOf(BookRepository.Sort.Added.name) }
+                // 视图三态：窗格(封面网格) → 带图列表 → 纯文本列表，循环切换。初始值从持久化读取。
+                var view by rememberSaveable {
+                    mutableStateOf(
+                        runCatching { ShelfView.valueOf(loadPref(prefs, KEY_SHELF_VIEW, ShelfView.TextList.name)) }
+                            .getOrDefault(ShelfView.TextList),
+                    )
+                }
+                // 排序：加入时间 / 阅读时间 / 书名。初始值从持久化读取。
+                var sortName by rememberSaveable {
+                    mutableStateOf(
+                        runCatching { BookRepository.Sort.valueOf(loadPref(prefs, KEY_SORT_NAME, BookRepository.Sort.Added.name)).name }.getOrDefault(BookRepository.Sort.Added.name),
+                    )
+                }
                 // 编辑模式 + 多选删除。
                 var editMode by rememberSaveable { mutableStateOf(false) }
                 var selected by rememberSaveable { mutableStateOf(emptySet<Long>()) }
@@ -207,8 +216,12 @@ class MainActivity : ComponentActivity() {
                             ShelfView.CoverList -> ShelfView.TextList
                             ShelfView.TextList -> ShelfView.Grid
                         }
+                        prefs.edit().putString(KEY_SHELF_VIEW, view.name).apply()
                     },
-                    onSortChange = { sortName = it },
+                    onSortChange = {
+                        sortName = it
+                        prefs.edit().putString(KEY_SORT_NAME, it).apply()
+                    },
                     onImport = { pickEpub.launch(arrayOf("application/epub+zip")) },
                     onEdit = {
                         editMode = !editMode
@@ -299,6 +312,12 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "Orilum.Main"
         private const val KEY_LAST_BOOK_ID = "last_book_id"
+        private const val KEY_SHELF_VIEW = "shelf_view"
+        private const val KEY_SORT_NAME = "shelf_sort_name"
+
+        /** 持久化的书架视图/排序：非法值回退默认。 */
+        private fun loadPref(prefs: android.content.SharedPreferences, key: String, default: String) =
+            prefs.getString(key, null)?.takeIf { it.isNotEmpty() } ?: default
     }
 }
 
