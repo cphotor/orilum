@@ -45,6 +45,8 @@ data class BookSettings(
     val useOriginalStyle: Boolean? = null,
     /** 翻页动画（平滑滑动）。 */
     val pageAnim: Boolean? = null,
+    /** 正文首屏封面等比例缩放：true=等比留白边不拉伸；false=拉伸铺满整屏。 */
+    val coverProportional: Boolean? = null,
 ) {
     /** 序列化为 JSON（仅输出非 null 字段）。 */
     @JvmOverloads
@@ -70,6 +72,7 @@ data class BookSettings(
         fontCode?.let { put("fontCode", it) }
         useOriginalStyle?.let { put("useOriginalStyle", it) }
         pageAnim?.let { put("pageAnim", it) }
+        coverProportional?.let { put("coverProportional", it) }
     }
 
     /** 是否为空（没有任何覆盖层）。 */
@@ -107,6 +110,7 @@ data class BookSettings(
                     fontCode = if (o.has("fontCode")) o.optString("fontCode") else null,
                     useOriginalStyle = if (o.has("useOriginalStyle")) o.optBoolean("useOriginalStyle") else null,
                     pageAnim = if (o.has("pageAnim")) o.optBoolean("pageAnim") else null,
+                    coverProportional = if (o.has("coverProportional")) o.optBoolean("coverProportional") else null,
                 )
             } catch (_: Exception) {
                 EMPTY
@@ -153,6 +157,7 @@ data class BookSettings(
             fontCode = rs.fontCode,
             useOriginalStyle = rs.useOriginalStyle,
             pageAnim = rs.pageAnim,
+            coverProportional = rs.coverProportional,
         )
     }
 }

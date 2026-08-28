@@ -1373,6 +1373,10 @@ const applySettings = (persist = true) => {
   // 再刷新已渲染封面页，使改动不需重排即可即时生效。
   window.__coverProportional = settings.coverProportional
   r?.refreshCoverFit?.()
+  // 开场动画封面(#cover 遮罩)同步跟随开关：settings 可能在此函数之前都未加载（preloadCover 先行），
+  // 故这里只要有 #cover 就按其等比/拉伸设置背景填充方式，保证开场封面与书内封面一致。
+  const coverEl = document.getElementById('cover')
+  if (coverEl) coverEl.style.backgroundSize = settings.coverProportional ? 'contain' : '100% 100%'
   // 日夜配色：给 body 挂 data-scheme 驱动 TOC/设置抽屉等「界面常驻层」CSS 换肤
   document.body.dataset.scheme = settings.scheme
   // 阅读器外壳背景/文字色跟随配色（含独立背景覆盖）；html 与 body 双层都设，杜绝四周露白边
@@ -2422,6 +2426,7 @@ function dismissOpening() {
 }
 
 let COVER_SHOWN = false // 封面是否已垫底显示（preloadCover / getCover 任一先命中即置位，避免重复）
+let pendingCoverBlob = null // preloadCover 提前解出的封面 blob 暂存：settings 就绪后才统一显示，避免"先白边再跳全屏"
 
 /** 把封面图整屏垫底并叠上加载动画。可安全重复调用（一次性）。 */
 function showCover(blob) {
@@ -2499,9 +2504,13 @@ async function extractCoverBlob(file) {
   return readBlob(resolveHref(href), type)
 }
 
-/** 打开书时并行提前解封面：成功即垫底 + 叠加载动画。失败静默（后续由 getCover / 无封面分支兜底）。 */
+/** 打开书时并行提前解封面：只缓存 blob，**不立即显示** —— 等 settings 就绪(applySettings)后由
+ *  presentCoverThenReading 统一按「封面等比例缩放」开关显示，避免 settings 未加载时先用默认
+ *  等比(白边)显示、settings 就绪后再切拉伸造成的"先白边再跳全屏"。失败静默（getCover 兜底）。 */
 function preloadCover(file) {
-  extractCoverBlob(file).then(showCover).catch(() => { /* 忽略 */ })
+  extractCoverBlob(file)
+    .then(b => { pendingCoverBlob = b ?? null })
+    .catch(() => { /* 忽略 */ })
 }
 
 /** 打开书后的开场动画：
@@ -2524,8 +2533,14 @@ function presentCoverThenReading() {
     coverEl?.addEventListener('click', scheduleDismiss, { once: true })
     setTimeout(scheduleDismiss, hold)
   }
-  // preloadCover 已提前垫底封面 → 直接收尾
-  if (COVER_SHOWN) { armDismiss(); return }
+  // settings 已由 loadBook .then 的 applySettings 就绪；这里统一显示封面（用正确开关，无跳变）。
+  const commit = blob => {
+    showCover(blob) // 按 settings.coverProportional 设 contain/拉伸
+    if (!COVER_SHOWN) showLoading() // 无可显示封面 → 白屏 + 加载动画
+    armDismiss()
+  }
+  // preloadCover 已提前解出封面 → 直接用它（settings 已就绪）
+  if (pendingCoverBlob) { commit(pendingCoverBlob); return }
   // 否则以 book 的 getCover 兜底（此时整本已解析完成）
   let coverPromise
   try { coverPromise = view.book?.getCover?.() } catch { /* 忽略 */ }
@@ -2536,11 +2551,7 @@ function presentCoverThenReading() {
     return
   }
   Promise.resolve(coverPromise)
-    .then(blob => {
-      showCover(blob) // 内部已做一次性去重；preload 若随后才完成也不会重复垫底
-      if (!COVER_SHOWN) showLoading() // 无可显示封面 → 白屏 + 加载动画
-      armDismiss()
-    })
+    .then(commit)
     .catch(() => { showLoading(); setTimeout(scheduleDismiss, hold) })
 }
 </script>

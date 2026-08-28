@@ -141,6 +141,7 @@ data class ReaderSettings(
         fontCode = overlay.fontCode ?: fontCode,
         useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
         pageAnim = overlay.pageAnim ?: pageAnim,
+        coverProportional = overlay.coverProportional ?: coverProportional,
     )
 
     /**
@@ -168,6 +169,7 @@ data class ReaderSettings(
         fontCode = overlay.fontCode ?: fontCode,
         useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
         pageAnim = overlay.pageAnim ?: pageAnim,
+        coverProportional = overlay.coverProportional ?: coverProportional,
     )
 
     companion object {
