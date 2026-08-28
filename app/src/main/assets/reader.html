@@ -2364,8 +2364,24 @@ addEventListener('touchcancel', () => {
 // 读取当前打开的书（由 Kotlin 经虚拟路径 /book/current.epub 提供字节）
 let OPEN_START = 0 // 打开书开始时刻（performance.now），用于开场动画停留时长计算
 
+/** 打开书即盖住全文：loading 遮罩立即满屏不透明(实体阅读底色、无过渡)，盖住 view.open 渲染 + 恢复定位全程，
+ *  直到 present 统一揭盖。有封面时 preloadCover 一到即换成封面；这里保证"先有遮挡、后再揭盖"，不露未排版正文。 */
+function bootMask() {
+  const el = document.getElementById('loading')
+  if (!el) return
+  el.classList.add('show')
+  el.style.transition = 'none'
+  el.style.opacity = '1'
+  try { el.style.background = effectiveBg() } catch (_) {}
+}
+
 async function loadBook(path) {
   OPEN_START = performance.now()
+  // 同步取用户设置(快)：让随后的封面垫底立即用正确开关，避免"先用默认、settings 就绪后再跳变"。
+  // 渲染正文的设置仍在 open 完成后 applySettings(false) 生效（见 loadBook().then）。
+  const bootSaved = bridgeGet('getSettings')
+  if (bootSaved) settings = { ...defaultSettings, ...JSON.parse(bootSaved) }
+  bootMask()
   const res = await fetch(path)
   if (!res.ok) throw new Error(`fetch ${path} -> ${res.status}`)
   const blob = await res.blob()
@@ -2383,9 +2399,6 @@ async function loadBook(path) {
   // 并行提前解出封面垫底：不等整本 view.open 完成，尽早把封面呈现出来，避免首屏长时间白屏转圈
   preloadCover(file)
   await view.open(file)
-  // 排版+恢复期间先用遮罩盖住正文，避免未排版(小字/不折行)内容裸露抖动；
-  // presentCoverThenReading() 在 goTo 返回后接管并统一淡出，故这里先行盖住。
-  document.getElementById('loading')?.classList.add('show')
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
     log('restoring locator by cfi')
@@ -2407,11 +2420,9 @@ async function loadBook(path) {
 loadBook('/book/current.epub')
   .then(() => {
     log('book opened')
-    // 读取后端持久化的用户设置（无则默认套）并应用到渲染；getSettings 已是生效值，无需回写
-    const saved = bridgeGet('getSettings')
-    if (saved) settings = { ...defaultSettings, ...JSON.parse(saved) }
+    // settings 已在 loadBook 开头同步取好；此处把渲染相关设置(字体/边距/配色)注入已渲染的正文
     applySettings(false)
-    // 首屏渲染完成 → 优先整屏展示 metadata 封面，随后淡入正文（临时遮罩，不进 spine）
+    // 开场已由 bootMask/preloadCover 垫住；这里统一接管揭盖时点
     presentCoverThenReading()
   })
   .catch(err => {
@@ -2461,8 +2472,11 @@ function showCover(blob) {
   coverEl.style.backgroundColor = effectiveBg()
   coverEl.classList.add('show')
   COVER_SHOWN = true
+  // 封面已显示（自带实体底色盖住正文）→ 清除 loading 的实体背景，仅保留 spinner 叠在封面上
+  const bootLoading = document.getElementById('loading')
+  if (bootLoading) bootLoading.style.background = 'transparent'
   // 封面已显示 → 立即叠上加载动画
-  document.getElementById('loading')?.classList.add('show')
+  bootLoading?.classList.add('show')
 }
 
 /** 从 epub 封包中独立解出封面图，不依赖 view.open 完成。
@@ -2527,8 +2541,13 @@ async function extractCoverBlob(file) {
  *  presentCoverThenReading 统一按「封面等比例缩放」开关显示，避免 settings 未加载时先用默认
  *  等比(白边)显示、settings 就绪后再切拉伸造成的"先白边再跳全屏"。失败静默（getCover 兜底）。 */
 function preloadCover(file) {
-  extractCoverBlob(file)
-    .then(b => { pendingCoverBlob = b ?? null })
+    extractCoverBlob(file).then(b => {
+      pendingCoverBlob = b ?? null
+      // settings 已提前同步就绪 → 立即垫封面盖住 open（用正确开关，无"先默认后跳变"）。
+      // 无封面则确保仍有实体 loading 盖住；都由 present 统一揭盖。
+      if (b) showCover(b)
+      else bootMask()
+    })
     .catch(() => { /* 忽略 */ })
 }
 

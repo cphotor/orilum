@@ -1568,9 +1568,6 @@ export class Paginator extends HTMLElement {
             position: 'relative', left: 'auto', top: 'auto',
         })
         const primaryView = this.#primaryView
-        // 等主章排版定稿后再锚定：避免按中途页数计算滚动、重排后 scroll 错位。
-        // 这是恢复/目录/书签/批注/链接共用的归位路径；预排/拼接是另一套流程，不受影响。
-        await this.#settleLayout(primaryView)
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
