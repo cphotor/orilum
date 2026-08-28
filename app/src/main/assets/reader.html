@@ -2373,6 +2373,7 @@ function bootMask() {
   el.style.transition = 'none'
   el.style.opacity = '1'
   try { el.style.background = effectiveBg() } catch (_) {}
+  log('[boot] bootMask：loading 实体盖住')
 }
 
 async function loadBook(path) {
@@ -2398,7 +2399,9 @@ async function loadBook(path) {
   } catch (_) {}
   // 并行提前解出封面垫底：不等整本 view.open 完成，尽早把封面呈现出来，避免首屏长时间白屏转圈
   preloadCover(file)
+  log('[boot] 即将 view.open（bootMask 应已盖住）')
   await view.open(file)
+  log('[boot] view.open 完成')
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
     log('restoring locator by cfi')
@@ -2420,6 +2423,7 @@ async function loadBook(path) {
 loadBook('/book/current.epub')
   .then(() => {
     log('book opened')
+    log('[boot] present 前 applySettings（主章应已渲染完毕，bootMask 应仍盖着）')
     // settings 已在 loadBook 开头同步取好；此处把渲染相关设置(字体/边距/配色)注入已渲染的正文
     applySettings(false)
     // 开场已由 bootMask/preloadCover 垫住；这里统一接管揭盖时点
@@ -2446,8 +2450,10 @@ function hideLoading() {
 
 /** 开场动画统一退出：把封面（若有）与加载遮罩一起淡出移除，露出已就绪的正文首屏。 */
 function dismissOpening() {
+  log('[boot] dismissOpening')
   const coverEl = document.getElementById('cover')
   if (coverEl) {
+    coverEl.style.transition = '' // 恢复默认 opacity 过渡：揭盖时封面柔和淡出（进时不淡入、消除闪正文）
     coverEl.classList.remove('show')
     coverEl.addEventListener('transitionend', () => coverEl.remove(), { once: true })
     setTimeout(() => coverEl.remove(), 800)
@@ -2471,8 +2477,11 @@ function showCover(blob) {
   // 底色跟当前阅读底色一致，使 contain 四周留白融入底色，不露硬边
   coverEl.style.backgroundColor = effectiveBg()
   coverEl.classList.add('show')
+  coverEl.style.transition = 'none'
+  coverEl.style.opacity = '1' // 立即不透明：封面从实体底色下无淡入切出，消除"半透明透出底部正文"的闪烁窗口
   COVER_SHOWN = true
-  // 封面已显示（自带实体底色盖住正文）→ 清除 loading 的实体背景，仅保留 spinner 叠在封面上
+  log('[boot] showCover: cover 立即不透明（无淡入，消除闪正文窗口）')
+  // 封面已不透明 → 清除 loading 实体背景，仅保留 spinner 叠在封面上
   const bootLoading = document.getElementById('loading')
   if (bootLoading) bootLoading.style.background = 'transparent'
   // 封面已显示 → 立即叠上加载动画
@@ -2543,6 +2552,7 @@ async function extractCoverBlob(file) {
 function preloadCover(file) {
     extractCoverBlob(file).then(b => {
       pendingCoverBlob = b ?? null
+      log('[boot] preloadCover 就绪 hasCover=' + (b ? 'yes' : 'no'))
       // settings 已提前同步就绪 → 立即垫封面盖住 open（用正确开关，无"先默认后跳变"）。
       // 无封面则确保仍有实体 loading 盖住；都由 present 统一揭盖。
       if (b) showCover(b)
@@ -2559,16 +2569,19 @@ function preloadCover(file) {
 function presentCoverThenReading() {
   const coverEl = document.getElementById('cover')
   const showLoading = () => document.getElementById('loading')?.classList.add('show')
-  // 开场停留时长 = max(1.5s, 实际加载耗时)
-  const hold = Math.max(1500, performance.now() - OPEN_START)
+  // 开场停留时长：open→目标章排版+定位恢复这段空白已由 bootMask/封面垫底盖满，
+  // 此处(就绪后)只需保留封面淡入的短停留(与 #cover 0.7s 过渡一致)，不再额外等固定 1.5s。
+  const hold = 700
   let scheduled = false
   const scheduleDismiss = () => {
     if (scheduled) return
     scheduled = true
+    log('[boot] scheduleDismiss -> dismissOpening（揭盖）')
     dismissOpening()
   }
   const armDismiss = () => {
     coverEl?.addEventListener('click', scheduleDismiss, { once: true })
+    log('[boot] armDismiss hold=' + hold)
     setTimeout(scheduleDismiss, hold)
   }
   // settings 已由 loadBook .then 的 applySettings 就绪；这里统一显示封面（用正确开关，无跳变）。
