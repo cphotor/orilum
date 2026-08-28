@@ -533,6 +533,8 @@ export class Paginator extends HTMLElement {
     #stabilizing = false          // goTo 稳定期（抑制 onExpand 抢滚动）
     #isAnimating = false          // snap 滚动动画中
     #trimming = false             // 窗口外章节销毁中（防重入）
+    #prepDir = 0                  // 最近方向种子(-1|0|1)：缺两个窗口时决定先排哪侧
+    #pendingPrepDir = false       // 开阔跳转后等待首次翻页写入方向种子
     columnCount = 1               // 本项目单栏整屏（每屏一页）
     /* ---- 三窗口缓存 + 预排 ----
      * 长条只保留当前章 ± 相邻 1 章（≤3 章）；预排只保证 primary±1 在池中。 */
@@ -961,25 +963,49 @@ export class Paginator extends HTMLElement {
             this.#destroyView(index)
             return
         }
-        // 邻章预排：排版定稿（字体/图片就绪、contentPages 收敛）后再拼入长条并做 prepend 补偿。
-        // 若按中途 fallback 字体的错误列数（日志里 8 页）先拼 + 补偿，随后该章收敛到 4 页时长条变窄、
-        // scroll 不同步，会把 primary 相对位置顶偏（恢复/跳转错位到末页）。排完再拼则恒用最终宽度。
-        // 主章不走此路径（#goTo 里已 settle），此处仅作用于 preload 的邻章，且不阻塞首屏揭盖。
-        if (index !== this.#primaryIndex) await this.#settleLayout(view)
+        // 判断是否「左邻章 prepend」：排在所有已装配视图之前、且非主章，需锚定补偿
+        const hasBefore = [...this.#views].some(([i]) => i < index)
+        const isLeftNeighbor = !hasBefore && index !== this.#primaryIndex
+        // 左邻章必须先等 contentPages 定稿，再拼入长条并补偿：
+        // 若用「临时(未定)页数」做补偿，视口会被过度后推——正是"保存745首页→恢复745末页"的回归根因。
+        // 该章此时仍屏外 fixed，等待不可见、无闪。
+        if (isLeftNeighbor) await this.#settleViewWidth(view)
         // 排完即拼入长条：从屏外 fixed 转为 relative → 进入 flex 布局
         Object.assign(view.element.style, {
             position: 'relative', left: 'auto', top: 'auto',
         })
-        // 若该章排在所有已装配视图之前（prepend），需锚定补偿
-        const hasBefore = [...this.#views].some(([i]) => i < index)
         try { window.EPUBBridge?.log?.('[asb] idx=' + index + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' start=' + Math.round(this.#renderedStart) + ' hasBefore=' + hasBefore) } catch (_) {}
-        if (!hasBefore && index !== this.#primaryIndex)
+        if (isLeftNeighbor)
             this.#compensatePrepend(view)
         this.#markPrepared(index)
         this.dispatchEvent(new CustomEvent('create-overlayer', {
             detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
         }))
         return view
+    }
+    /** 等待指定视图的 contentPages 定稿（等字体 + 首帧 + 连续稳定帧）。
+     *  WebKit 的字体加载/末列取整会在加载完成后**晚一步**再跳 1 页，
+     *  若此时就用该临时页数做 prepend 补偿，会把视口过度后推。
+     *  屏外 fixed 态等待，不影响可见视口、无闪烁。 */
+    async #settleViewWidth(view) {
+        const doc = view?.document
+        if (!doc) return
+        try { await doc.fonts.ready } catch (_) {}
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        let last = view.contentPages
+        let stable = 0
+        // 最多 1.5s：等 contentPages 连续稳定(≥2 次相同)才认为真正定稿
+        for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 50))
+            const now = view.contentPages
+            if (now === last && now > 0) {
+                if (++stable >= 2) break
+            } else {
+                last = now
+                stable = 0
+            }
+        }
+        try { window.EPUBBridge?.log?.('[stl] idx=' + view.index + ' cpFinal=' + view.contentPages) } catch (_) {}
     }
     /** 在长条最左（视口上方）装入章节后的锚定补偿：视口内容不动、不闪。 */
     #compensatePrepend(view) {
@@ -1061,12 +1087,17 @@ export class Paginator extends HTMLElement {
      *  返回第一个「未排(@prepState!==2)且非 linear=no」的相邻章；都不满足则 -1（窗口内已排齐）。 */
     #popNearestPrep() {
         const cur = this.#primaryIndex
-        for (const i of [cur - 1, cur + 1]) {
-            if (i >= 0 && i < this.sections.length
-                && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
-                return i
+        // 需补的邻章（未排且非 linear=no）
+        const needed = [cur - 1, cur + 1].filter(i =>
+            i >= 0 && i < this.sections.length
+            && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
+        if (needed.length <= 1) return needed[0] ?? -1
+        // 缺两个窗口 → 用方向种子决定先排哪侧；无方向种子则对称（先左）
+        if (this.#prepDir !== 0) {
+            const d = this.#prepDir
+            return needed.includes(cur + d) ? cur + d : cur + (-d)
         }
-        return -1
+        return needed[0]
     }
     /** 预排：三窗口下窗口内最多 3 章，逐个加载未排的相邻章，排齐即停。
      *  无需 idle/分帧调度（工作量极小），仅用 #idlePreload 防重入。 */
@@ -1411,38 +1442,6 @@ export class Paginator extends HTMLElement {
      *  字体/图片加载会让 contentPages 重排（日志里往往 1→3→4 页）；若按中途页数计算滚动，
      *  重排后 scroll 会错位到章末/前一章。已定稿的邻章（字体就绪）几乎不增加耗时。
      *  供恢复/目录/书签/批注/链接等所有锚点归位共用。 */
-    async #settleLayout(view) {
-        const doc = view?.document
-        if (!doc) return
-        // 字体就绪是 contentPages 重排的主异步源，设上限防个别字体加载卡死流程。
-        try {
-            if (doc.fonts?.ready)
-                await Promise.race([doc.fonts.ready, wait(2000)])
-        } catch (_) {}
-        // 图片解码撑高也会改变页数，逐个等（失败忽略），配合上面的字体等待一次收敛。
-        try {
-            await Promise.all([...doc.images].map(i =>
-                i.complete ? undefined : (i.decode?.() ?? Promise.resolve()).catch(() => {})))
-        } catch (_) {}
-        // 前述等待已让 ResizeObserver/expand 触发重排落地；再空转观察 contentPages 收敛。
-        // 不主动重复 expand()：避免"排版中途反复重绘 → 先显示未排版、再刷成定稿"的闪烁。
-        // 大章(contentPages 大、持续增长如 216→277)需更久才收敛：改为"连续 3 帧不再变化"才放行，
-        // 并用较宽的帧数上限(约1.5s)兜底，避免"未定稿就锚定、字体/图片陆续就绪后 scroll 再跳"。
-        await new Promise(resolve => {
-            let last = view.contentPages, stable = 0
-            let rounds = 0
-            const maxRounds = 90
-            const tick = () => {
-                const cur = view.contentPages
-                if (cur === last) stable++
-                else { last = cur; stable = 0 }
-                if ((rounds > 5 && stable >= 3) || rounds > maxRounds) return resolve()
-                rounds++
-                requestAnimationFrame(tick)
-            }
-            requestAnimationFrame(tick)
-        })
-    }
     async scrollToAnchor(anchor, select) {
         return this.#scrollToAnchor(anchor, select ? 'selection' : 'navigation')
     }
@@ -1461,7 +1460,7 @@ export class Paginator extends HTMLElement {
             const primaryOffset = this.#getViewOffset(this.#primaryIndex)
             const primarySize = this.#primaryView
                 ? this.#primaryView.element.getBoundingClientRect()[this.sideProp] : this.#renderedViewSize
-            await this.#scrollTo(primaryOffset + anchor * primarySize, reason)
+            await this.#scrollTo(primaryOffset + anchor * primarySize, reason, false)
             return
         }
         // 分数锚点 → 换算成 primary 内页 + 前置页，再定位到容器页
@@ -1470,7 +1469,7 @@ export class Paginator extends HTMLElement {
         const pagesBeforePrimary = this.#getPagesBeforeView(this.#primaryIndex)
         const textPages = primaryView.contentPages
         const newPage = Math.round(anchor * Math.max(0, textPages - 1))
-        await this.#scrollToPage(pagesBeforePrimary + newPage, reason)
+        await this.#scrollToPage(pagesBeforePrimary + newPage, reason, false)
     }
     #getVisibleRange() {
         const targetView = this.#primaryView
@@ -1567,13 +1566,33 @@ export class Paginator extends HTMLElement {
         }
         this.#primaryIndex = index
         this.#markPrepared(index) // #goTo 直接加载的章也标记预排状态，避免被预排循环重复取到
-        // 先排版后销毁：目标章（可能刚加载完）已就绪，此时一次性销毁所有无关旧章，让长条收敛为
-        // 「目标章 + 后续预排邻章」。销毁前旧章已作为过渡保留在屏幕，杜绝"跳到目标章却被拽回旧章"。
-        // 长条立即以目标章为新的 offset 基准(0)，后续定位不再依赖被删旧章。
-        if (this.#views.size > 1) {
-            for (const [i] of [...this.#views]) if (i !== index) this.#destroyView(i)
-            this.containerPosition = 0
+        // 目标章必须在 contentPages 定稿后才落位：否则用临时(未定)宽度 + 翻页动画去 scrollToAnchor，
+        // 定稿过程(如 cp 1→3→4)每次 expand 都触发 onExpand→#scrollToAnchor 重锚 → 前后翻页均闪现。
+        // 此刻 #stabilizing=true，onExpand 重锚被抑制；等定稿后再一次性精确落位。
+        await this.#settleViewWidth(view)
+        // 保留 ±1 邻章（历史窗口）作反向窗口，只销毁「距目标 >1」的远章：
+        // 同向连翻时翻过去的章自然成为反向窗口，无需再销毁→重预排（消除反向侧反复预排/裁剪跳动）。
+        const drop = [...this.#views.keys()]
+            .filter(i => i !== index && Math.abs(i - index) > 1)
+        if (drop.length) {
+            // 销毁左侧远章后长条变短：按逻辑 leftTotal(= contentPages×size) 补偿 scroll，保持视口内容不动
+            const left = drop.filter(i => i < index).sort((a, b) => a - b)
+            const right = drop.filter(i => i > index).sort((a, b) => b - a)
+            const size = this.size
+            let leftTotal = 0
+            for (const i of left) leftTotal += (this.#views.get(i)?.contentPages ?? 0) * size
+            const preScroll = this.#container[this.scrollProp]
+            for (const i of right) this.#destroyView(i)
+            for (const i of left) this.#destroyView(i)
+            if (leftTotal) this.containerPosition = preScroll - (this.#vertical ? -1 : 1) * leftTotal
+            this.#scrollBounds = [this.#container[this.scrollProp],
+                this.atStart ? 0 : this.size, this.atEnd ? 0 : this.size]
         }
+        // 若长条只剩目标章自身（孤卒：打开/远距跳转，无重叠邻章），以目标章为 offset 基准 0
+        if (this.#views.size === 1) this.containerPosition = 0
+        // 开阔跳转（销毁了全部旧窗口）：重置「方向种子」，等待跳转后的首次翻页写入。
+        // 仅当「缺两个窗口」时用该方向决定先排哪侧；跳转前的方向一律不理睬。
+        if (this.#views.size === 1) { this.#prepDir = 0; this.#pendingPrepDir = true }
         const hasFocus = this.#primaryView?.document?.hasFocus()
         try { window.EPUBBridge?.log?.('[#go] idx=' + index + ' vo=' + Math.round(this.#getViewOffset(index)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' cp=' + (this.#views.get(index)?.contentPages ?? '?')) } catch (_) {}
         // #goTo 加载的视图初始 position:fixed，现转为 relative 进入 flex 长条
@@ -1581,11 +1600,6 @@ export class Paginator extends HTMLElement {
             position: 'relative', left: 'auto', top: 'auto',
         })
         const primaryView = this.#primaryView
-        // 等主章排版定稿（字体/图片就绪、contentPages 收敛）后再锚定。
-        // 否则重开时主章先以 fallback 字体排版（行距/段距更大），与目录跳转(真实字体)的版式不一致，
-        // 保存的定位(真实字体)套在 fallback 版式上会偏移。bootMask/封面此刻已盖住全程，等待不外露。
-        // 已就绪的邻章(翻页/目录) fonts.ready 立即 resolve，几乎不增加耗时。
-        await this.#settleLayout(primaryView)
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
@@ -1608,6 +1622,8 @@ export class Paginator extends HTMLElement {
     }
     #scrollPrev(distance) {
         if (this.#views.size === 0) return true
+        // 「跳转后首次翻页」写入方向种子（开阔跳转后决定先排哪侧）
+        if (this.#pendingPrepDir) { this.#prepDir = -1; this.#pendingPrepDir = false }
         if (this.scrolled) {
             if (this.#renderedStart > 0) return this.#scrollTo(
                 Math.max(0, this.#renderedStart - (distance ?? this.size)), null, true)
@@ -1620,6 +1636,7 @@ export class Paginator extends HTMLElement {
     }
     #scrollNext(distance) {
         if (this.#views.size === 0) return true
+        if (this.#pendingPrepDir) { this.#prepDir = 1; this.#pendingPrepDir = false }
         if (this.scrolled) {
             if (this.#renderedViewSize - this.#renderedEnd > 2) return this.#scrollTo(
                 Math.min(this.#renderedViewSize, distance ? this.#renderedStart + distance : this.#renderedEnd), null, true)
