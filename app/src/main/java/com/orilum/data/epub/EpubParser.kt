@@ -56,6 +56,8 @@ class EpubParser {
 
         if (spineIds.isEmpty()) throw EpubFormatException("OPF 中 spine 为空")
 
+        val cover = resolveCover(opf, opfDir, manifest)
+
         val spine = spineIds.mapIndexed { index, id ->
             val item = manifest[id] ?: throw EpubFormatException("spine 引用不存在的 manifest id：$id")
             val (href, fragment) = splitFragment(item.href)
@@ -63,10 +65,24 @@ class EpubParser {
         }
         val toc = resolveToc(reader, opfDir, spine, manifest.values)
 
-        return EpubBook(title ?: "未知书名", author, spine, toc)
+        return EpubBook(title ?: "未知书名", author, spine, toc, cover)
     }
 
     // ---- container.xml / OPF 定位 ----
+
+    /** 解析封面图资源完整路径：优先 manifest `properties=cover-image`，次选 meta[name=cover] 引用的 id。
+     *  返回相对 OPF 目录的完整路径；找不到返回 null。 */
+    private fun resolveCover(opf: Element, opfDir: String, manifest: Map<String, ManifestItem>): String? {
+        // 1) manifest 中 properties 含 cover-image
+        val coverItem = manifest.values.firstOrNull { it.properties.contains("cover-image") }
+        if (coverItem != null) return joinPath(opfDir, coverItem.href)
+        // 2) metadata <meta name="cover" content="cover-id">
+        val metaId = elementChildren(elementChildren(opf, "metadata").firstOrNull() ?: return null, "meta")
+            .firstOrNull { it.getAttribute("name") == "cover" }?.getAttribute("content")?.takeIf { it.isNotBlank() }
+        val byId = metaId?.let { manifest[it] }
+        if (byId != null && (byId.mediaType ?: "").startsWith("image")) return joinPath(opfDir, byId.href)
+        return null
+    }
 
     private fun resolveOpfPath(reader: EpubResourceReader): String? {
         val xml = reader.readText("META-INF/container.xml") ?: return null

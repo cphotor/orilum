@@ -16,11 +16,26 @@ interface BookDao {
     @Insert
     suspend fun insert(book: Book): Long
 
+    @Upsert
+    suspend fun upsert(book: Book)
+
     @Query("SELECT * FROM books ORDER BY addedAt DESC")
     fun observeBooks(): Flow<List<Book>>
 
+    @Query("SELECT * FROM books ORDER BY readTime DESC")
+    fun observeBooksByReadTime(): Flow<List<Book>>
+
+    @Query("SELECT * FROM books ORDER BY title COLLATE NOCASE ASC")
+    fun observeBooksByName(): Flow<List<Book>>
+
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun book(id: Long): Book?
+
+    @Query("SELECT * FROM books")
+    suspend fun allBooks(): List<Book>
+
+    @Query("UPDATE books SET readTime = :time WHERE id = :id")
+    suspend fun updateReadTime(id: Long, time: Long)
 
     @Delete
     suspend fun delete(book: Book)

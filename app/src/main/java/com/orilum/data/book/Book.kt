@@ -19,4 +19,16 @@ data class Book(
     val author: String? = null,
     val filePath: String,
     val addedAt: Long = System.currentTimeMillis(),
-)
+    /** 封面图本地私有路径（导入时从 EPUB 提取缓存）；无封面为 null。 */
+    val coverPath: String? = null,
+    /** 最近一次打开阅读的时间戳（ms）；用于「按阅读时间近→远」排序。 */
+    val readTime: Long? = null,
+) {
+    /**
+     * 与另一本书是否视为「同一本书」：书名（忽略大小写）与作者均一致。
+     * 作者为 null 视为空串参与比较，避免「同名不同作者」或「缺作者」误判。
+     */
+    fun sameBookAs(otherTitle: String, otherAuthor: String?): Boolean =
+        title.equals(otherTitle, ignoreCase = true) &&
+            (author ?: "").equals(otherAuthor ?: "", ignoreCase = true)
+}

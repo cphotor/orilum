@@ -11,6 +11,8 @@ data class EpubBook(
     val author: String?,
     val spine: List<SpineItem>,
     val toc: List<TocItem>,
+    /** 封面图资源的完整路径（相对 OPF 目录）；无封面为 null。 */
+    val cover: String? = null,
 ) {
     /** 书芯为空视为无效电子书。 */
     val isEmpty: Boolean get() = spine.isEmpty()
