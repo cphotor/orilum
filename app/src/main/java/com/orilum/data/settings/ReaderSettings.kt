@@ -48,6 +48,8 @@ data class ReaderSettings(
     val autoContinue: Boolean = true,
     /** 显示页码。 */
     val pageNum: Boolean = false,
+    /** 正文首屏封面等比例缩放开关：开 = 等比缩放（不变形、四周留阅读底色）；关 = 拉伸铺满整屏（可变形）。 */
+    val coverProportional: Boolean = true,
     /** 【样式系统】字号相对默认缩放：0..100 滑块，50 = 默认 1.0（见 COMPANION 映射）。 */
     val fontScale: Double = DEFAULT_FONT_SCALE,
     /** 【样式系统】日夜整套配色：day（白天）| night（夜间）。 */
@@ -98,6 +100,7 @@ data class ReaderSettings(
         put("pageAnim", pageAnim)
         put("autoContinue", autoContinue)
         put("pageNum", pageNum)
+        put("coverProportional", coverProportional)
         put("fontScale", fontScale)
         put("scheme", scheme)
         put("bgOverride", bgOverride)
@@ -258,6 +261,7 @@ data class ReaderSettings(
                     pageAnim = o.optBoolean("pageAnim", d.pageAnim),
                     autoContinue = o.optBoolean("autoContinue", d.autoContinue),
                     pageNum = o.optBoolean("pageNum", d.pageNum),
+                    coverProportional = o.optBoolean("coverProportional", d.coverProportional),
                     fontScale = fontScale,
                     scheme = scheme,
                     bgOverride = bgOverride,

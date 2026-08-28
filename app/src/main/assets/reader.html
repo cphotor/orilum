@@ -953,6 +953,7 @@ const defaultSettings = {
   // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
   layoutTheme: 'original',
   pageAnim: true, autoContinue: true, pageNum: false,
+  coverProportional: true,   // 正文首屏封面等比例缩放：开 = 等比不变形留白边；关 = 拉伸铺满整屏
   brightness: 100,              // 亮度档位（非跟随时）：-50..100；0..100 写系统亮度物理背光，-50..0 系统最暗再叠遮罩压暗
   brightnessFollowSystem: true, // 跟随系统亮度：开 → 亮度档位滑块禁用，改用偏移微调
   brightnessOffset: 0,          // 跟随系统时的亮度偏移 -20..20（0 = 完全跟随不调整）
@@ -1368,6 +1369,10 @@ const applySettings = (persist = true) => {
     if (settings.pageAnim) r.setAttribute?.('animated', '')
     else r.removeAttribute?.('animated')
   }
+  // 封面等比例缩放：把开关经顶层全局传给 paginator（View.setImageSize 按它决定 object-fit），
+  // 再刷新已渲染封面页，使改动不需重排即可即时生效。
+  window.__coverProportional = settings.coverProportional
+  r?.refreshCoverFit?.()
   // 日夜配色：给 body 挂 data-scheme 驱动 TOC/设置抽屉等「界面常驻层」CSS 换肤
   document.body.dataset.scheme = settings.scheme
   // 阅读器外壳背景/文字色跟随配色（含独立背景覆盖）；html 与 body 双层都设，杜绝四周露白边
@@ -2158,6 +2163,7 @@ const settingsTopPage = settingsPage('设置', el => {
   el.append(settingsRow('背景颜色', { valId: 'v-bg', swatch: true, onTap: () => pushSettingsPage(bgOverridePage, '背景颜色') }))
   el.append(settingsRow('亮度', { valId: 'v-brightness', value: brightnessSummary(), onTap: () => pushSettingsPage(brightnessPage, '亮度') }))
   el.append(settingsSwitch('翻页动画', 'set-page-anim', v => { settings.pageAnim = v; applySettings(true) }))
+  el.append(settingsSwitch('封面等比例缩放', 'set-cover-prop', v => { settings.coverProportional = v; applySettings(true) }))
   el.append(settingsSwitch('启动时继续阅读', 'set-auto-continue', v => {
     settings.autoContinue = v; saveSettings() // 开启后，下次启动 app 直接进入上次阅读的书（定位恢复始终默认生效）
   }))
@@ -2172,6 +2178,7 @@ const refreshSettingsUI = () => {
   if (set('set-page-anim')) set('set-page-anim').checked = settings.pageAnim
   if (set('set-auto-continue')) set('set-auto-continue').checked = settings.autoContinue
   if (set('set-page-num')) set('set-page-num').checked = settings.pageNum
+  if (set('set-cover-prop')) set('set-cover-prop').checked = settings.coverProportional
 }
 
 // 打开/关闭设置抽屉（与目录抽屉互斥）
@@ -2423,6 +2430,9 @@ function showCover(blob) {
   if (!blob || typeof blob === 'undefined' || typeof blob.arrayBuffer !== 'function') return
   const url = URL.createObjectURL(blob)
   coverEl.style.backgroundImage = `url(${url})`
+  // 开场封面与书内封面跟随同一开关「封面等比例缩放」：开 = 等比 contain（四周留底色边）；关 = 拉伸铺满。
+  // 保证两处封面显示形态一致（默认开关开启、都为等比留白边）。
+  coverEl.style.backgroundSize = settings.coverProportional ? 'contain' : '100% 100%'
   // 底色跟当前阅读底色一致，使 contain 四周留白融入底色，不露硬边
   coverEl.style.backgroundColor = effectiveBg()
   coverEl.classList.add('show')

@@ -381,25 +381,30 @@ class View {
         // 封面页：取消图片边距余量（effMargin=0），水平模式 max-height 变为确定像素整屏高、
         // max-width 恒 100%（整屏列宽），object-fit:contain → 至少一维贴边，实现整屏封面。
         const effMargin = this.isCover ? 0 : (margin ?? 0)
+        // 封面拉伸填满：由阅读设置「封面等比例缩放」开关决定（reader 顶层经 window.__coverProportional 传入）。
+        // true/未定义 = 等比缩放（object-fit:contain，不变形、四周留阅读底色）；false = 拉伸铺满整屏（object-fit:fill，可变形）。
+        const coverFill = window.__coverProportional === false
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
-            // 封面矢量图：让 svg 撑满整页（配合封面样式 html,body,body>*{height:100%}）。
-            // 关键：许多 svg 封面的 viewBox 比其内嵌 <image> 小（出版社做成裁切封皮），
-            // 直接按 viewBox 渲染会裁掉图片右/下内容。把 viewBox 改成 <image> 全图尺寸、
-            // 保持 preserveAspectRatio=none，令完整封面拉伸填满整页，不裁切。
+            // 封面矢量图：确保有「内容全图」viewBox + 正确的 preserveAspectRatio，使整幅封面 fit 进整页，杜绝放大超屏/裁切。
+            // 许多 EPUB 封面 svg 的 viewBox 比内嵌 <image> 小（如裁切封皮），甚至会 <image> 裁掉右/下内容，
+            // 或 viewBox 比图大 → 直接按原始/作者 viewBox 渲染导致「封面放大到大于屏幕、只显示一部分」。
+            // 这里**一律**以 <image> 完整尺寸改写 viewBox（不判断是否已有 viewBox，避免作者给了小 viewBox 时不覆盖而裁切）：
+            //  - 等比(coverFill=false)：preserveAspectRatio=xMidYMid meet → 整幅等比缩放居中，四周留阅读底色
+            //  - 拉伸(coverFill=true)：preserveAspectRatio=none + object-fit:fill → 铺满整页（可变形）
             if (this.isCover && el.tagName.toLowerCase() === 'svg') {
                 const sub = el.querySelector('image')
                 const iw = sub ? parseFloat(sub.getAttribute('width')) : NaN
                 const ih = sub ? parseFloat(sub.getAttribute('height')) : NaN
                 if (iw > 0 && ih > 0) {
                     el.setAttribute('viewBox', `0 0 ${iw} ${ih}`)
-                    el.setAttribute('preserveAspectRatio', 'none')
                 }
+                el.setAttribute('preserveAspectRatio', coverFill ? 'none' : 'xMidYMid meet')
                 setStylesImportant(el, {
                     'width': '100% !important',
                     'height': '100% !important',
                     'max-width': 'none',
                     'max-height': 'none',
-                    'object-fit': 'fill',
+                    'object-fit': coverFill ? 'fill' : 'contain',
                     'display': 'block',
                     'page-break-inside': 'avoid',
                     'break-inside': 'avoid',
@@ -416,7 +421,7 @@ class View {
                 'max-width': vertical
                     ? `${width - effMargin * 2}px`
                     : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%'),
-                'object-fit': 'contain',
+                'object-fit': coverFill ? 'fill' : 'contain',
                 'page-break-inside': 'avoid',
                 'break-inside': 'avoid',
                 'box-sizing': 'border-box',
@@ -1653,6 +1658,13 @@ export class Paginator extends HTMLElement {
         })
         // needed because the resize observer doesn't work in Firefox
         this.#primaryView?.document?.fonts?.ready?.then(() => this.#primaryView.expand())
+    }
+    /** 刷新已渲染封面页的 object-fit：按 window.__coverProportional（阅读设置「封面等比例缩放」开关）
+     *  重设封面图片填充方式，无需重排即可即时切换 等比缩放/拉伸铺满。非封面 view 不受影响。 */
+    refreshCoverFit() {
+        for (const view of this.#views.values()) {
+            if (view?.isCover) view.setImageSize()
+        }
     }
     focusView() {
         this.#primaryView?.document?.defaultView?.focus()

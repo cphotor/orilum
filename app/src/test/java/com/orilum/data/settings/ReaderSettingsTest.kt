@@ -37,6 +37,7 @@ class ReaderSettingsTest {
             pageAnim = false,
             autoContinue = false,
             pageNum = true,
+            coverProportional = false,
         )
         assertEquals(custom, ReaderSettings.fromJson(custom.toJson()))
     }
@@ -89,7 +90,7 @@ class ReaderSettingsTest {
             "theme", "fontSize", "lineSpacing",
             "marginTop", "marginBottom", "marginLeft", "marginRight",
             "fontBody", "fontTitle", "fontCode",
-            "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum",
+            "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum", "coverProportional",
             "fontScale", "scheme", "bgOverride", "fgOverride", "layoutTheme",
         ).forEach { assertTrue("missing key $it", obj.has(it)) }
         assertNotNull(obj.keys())
