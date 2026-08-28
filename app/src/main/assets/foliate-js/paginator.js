@@ -528,6 +528,8 @@ export class Paginator extends HTMLElement {
     #stabilizing = false          // goTo 稳定期（抑制 onExpand 抢滚动）
     #isAnimating = false          // snap 滚动动画中
     #trimming = false             // 窗口外章节销毁中（防重入）
+    #prepDir = 0                  // 最近方向种子(-1|0|1)：缺两个窗口时决定先排哪侧
+    #pendingPrepDir = false       // 开阔跳转后等待首次翻页写入方向种子
     columnCount = 1               // 本项目单栏整屏（每屏一页）
     /* ---- 三窗口缓存 + 预排 ----
      * 长条只保留当前章 ± 相邻 1 章（≤3 章）；预排只保证 primary±1 在池中。 */
@@ -1073,12 +1075,17 @@ export class Paginator extends HTMLElement {
      *  返回第一个「未排(@prepState!==2)且非 linear=no」的相邻章；都不满足则 -1（窗口内已排齐）。 */
     #popNearestPrep() {
         const cur = this.#primaryIndex
-        for (const i of [cur - 1, cur + 1]) {
-            if (i >= 0 && i < this.sections.length
-                && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
-                return i
+        // 需补的邻章（未排且非 linear=no）
+        const needed = [cur - 1, cur + 1].filter(i =>
+            i >= 0 && i < this.sections.length
+            && this.sections[i]?.linear !== 'no' && this.#prepState[i] !== 2)
+        if (needed.length <= 1) return needed[0] ?? -1
+        // 缺两个窗口 → 用方向种子决定先排哪侧；无方向种子则对称（先左）
+        if (this.#prepDir !== 0) {
+            const d = this.#prepDir
+            return needed.includes(cur + d) ? cur + d : cur + (-d)
         }
-        return -1
+        return needed[0]
     }
     /** 预排：三窗口下窗口内最多 3 章，逐个加载未排的相邻章，排齐即停。
      *  无需 idle/分帧调度（工作量极小），仅用 #idlePreload 防重入。 */
@@ -1437,7 +1444,7 @@ export class Paginator extends HTMLElement {
             const primaryOffset = this.#getViewOffset(this.#primaryIndex)
             const primarySize = this.#primaryView
                 ? this.#primaryView.element.getBoundingClientRect()[this.sideProp] : this.#renderedViewSize
-            await this.#scrollTo(primaryOffset + anchor * primarySize, reason)
+            await this.#scrollTo(primaryOffset + anchor * primarySize, reason, false)
             return
         }
         // 分数锚点 → 换算成 primary 内页 + 前置页，再定位到容器页
@@ -1446,7 +1453,7 @@ export class Paginator extends HTMLElement {
         const pagesBeforePrimary = this.#getPagesBeforeView(this.#primaryIndex)
         const textPages = primaryView.contentPages
         const newPage = Math.round(anchor * Math.max(0, textPages - 1))
-        await this.#scrollToPage(pagesBeforePrimary + newPage, reason)
+        await this.#scrollToPage(pagesBeforePrimary + newPage, reason, false)
     }
     #getVisibleRange() {
         const targetView = this.#primaryView
@@ -1543,13 +1550,33 @@ export class Paginator extends HTMLElement {
         }
         this.#primaryIndex = index
         this.#markPrepared(index) // #goTo 直接加载的章也标记预排状态，避免被预排循环重复取到
-        // 先排版后销毁：目标章（可能刚加载完）已就绪，此时一次性销毁所有无关旧章，让长条收敛为
-        // 「目标章 + 后续预排邻章」。销毁前旧章已作为过渡保留在屏幕，杜绝"跳到目标章却被拽回旧章"。
-        // 长条立即以目标章为新的 offset 基准(0)，后续定位不再依赖被删旧章。
-        if (this.#views.size > 1) {
-            for (const [i] of [...this.#views]) if (i !== index) this.#destroyView(i)
-            this.containerPosition = 0
+        // 目标章必须在 contentPages 定稿后才落位：否则用临时(未定)宽度 + 翻页动画去 scrollToAnchor，
+        // 定稿过程(如 cp 1→3→4)每次 expand 都触发 onExpand→#scrollToAnchor 重锚 → 前后翻页均闪现。
+        // 此刻 #stabilizing=true，onExpand 重锚被抑制；等定稿后再一次性精确落位。
+        await this.#settleViewWidth(view)
+        // 保留 ±1 邻章（历史窗口）作反向窗口，只销毁「距目标 >1」的远章：
+        // 同向连翻时翻过去的章自然成为反向窗口，无需再销毁→重预排（消除反向侧反复预排/裁剪跳动）。
+        const drop = [...this.#views.keys()]
+            .filter(i => i !== index && Math.abs(i - index) > 1)
+        if (drop.length) {
+            // 销毁左侧远章后长条变短：按逻辑 leftTotal(= contentPages×size) 补偿 scroll，保持视口内容不动
+            const left = drop.filter(i => i < index).sort((a, b) => a - b)
+            const right = drop.filter(i => i > index).sort((a, b) => b - a)
+            const size = this.size
+            let leftTotal = 0
+            for (const i of left) leftTotal += (this.#views.get(i)?.contentPages ?? 0) * size
+            const preScroll = this.#container[this.scrollProp]
+            for (const i of right) this.#destroyView(i)
+            for (const i of left) this.#destroyView(i)
+            if (leftTotal) this.containerPosition = preScroll - (this.#vertical ? -1 : 1) * leftTotal
+            this.#scrollBounds = [this.#container[this.scrollProp],
+                this.atStart ? 0 : this.size, this.atEnd ? 0 : this.size]
         }
+        // 若长条只剩目标章自身（孤卒：打开/远距跳转，无重叠邻章），以目标章为 offset 基准 0
+        if (this.#views.size === 1) this.containerPosition = 0
+        // 开阔跳转（销毁了全部旧窗口）：重置「方向种子」，等待跳转后的首次翻页写入。
+        // 仅当「缺两个窗口」时用该方向决定先排哪侧；跳转前的方向一律不理睬。
+        if (this.#views.size === 1) { this.#prepDir = 0; this.#pendingPrepDir = true }
         const hasFocus = this.#primaryView?.document?.hasFocus()
         try { window.EPUBBridge?.log?.('[#go] idx=' + index + ' vo=' + Math.round(this.#getViewOffset(index)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' cp=' + (this.#views.get(index)?.contentPages ?? '?')) } catch (_) {}
         // #goTo 加载的视图初始 position:fixed，现转为 relative 进入 flex 长条
@@ -1578,6 +1605,8 @@ export class Paginator extends HTMLElement {
     }
     #scrollPrev(distance) {
         if (this.#views.size === 0) return true
+        // 「跳转后首次翻页」写入方向种子（开阔跳转后决定先排哪侧）
+        if (this.#pendingPrepDir) { this.#prepDir = -1; this.#pendingPrepDir = false }
         if (this.scrolled) {
             if (this.#renderedStart > 0) return this.#scrollTo(
                 Math.max(0, this.#renderedStart - (distance ?? this.size)), null, true)
@@ -1590,6 +1619,7 @@ export class Paginator extends HTMLElement {
     }
     #scrollNext(distance) {
         if (this.#views.size === 0) return true
+        if (this.#pendingPrepDir) { this.#prepDir = 1; this.#pendingPrepDir = false }
         if (this.scrolled) {
             if (this.#renderedViewSize - this.#renderedEnd > 2) return this.#scrollTo(
                 Math.min(this.#renderedViewSize, distance ? this.#renderedStart + distance : this.#renderedEnd), null, true)
