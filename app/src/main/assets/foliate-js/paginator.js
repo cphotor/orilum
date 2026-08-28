@@ -956,20 +956,49 @@ export class Paginator extends HTMLElement {
             this.#destroyView(index)
             return
         }
+        // 判断是否「左邻章 prepend」：排在所有已装配视图之前、且非主章，需锚定补偿
+        const hasBefore = [...this.#views].some(([i]) => i < index)
+        const isLeftNeighbor = !hasBefore && index !== this.#primaryIndex
+        // 左邻章必须先等 contentPages 定稿，再拼入长条并补偿：
+        // 若用「临时(未定)页数」做补偿，视口会被过度后推——正是"保存745首页→恢复745末页"的回归根因。
+        // 该章此时仍屏外 fixed，等待不可见、无闪。
+        if (isLeftNeighbor) await this.#settleViewWidth(view)
         // 排完即拼入长条：从屏外 fixed 转为 relative → 进入 flex 布局
         Object.assign(view.element.style, {
             position: 'relative', left: 'auto', top: 'auto',
         })
-        // 若该章排在所有已装配视图之前（prepend），需锚定补偿
-        const hasBefore = [...this.#views].some(([i]) => i < index)
         try { window.EPUBBridge?.log?.('[asb] idx=' + index + ' primary=' + this.#primaryIndex + ' voP=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' start=' + Math.round(this.#renderedStart) + ' hasBefore=' + hasBefore) } catch (_) {}
-        if (!hasBefore && index !== this.#primaryIndex)
+        if (isLeftNeighbor)
             this.#compensatePrepend(view)
         this.#markPrepared(index)
         this.dispatchEvent(new CustomEvent('create-overlayer', {
             detail: { doc: view.document, index, attach: overlayer => view.overlayer = overlayer },
         }))
         return view
+    }
+    /** 等待指定视图的 contentPages 定稿（等字体 + 首帧 + 连续稳定帧）。
+     *  WebKit 的字体加载/末列取整会在加载完成后**晚一步**再跳 1 页，
+     *  若此时就用该临时页数做 prepend 补偿，会把视口过度后推。
+     *  屏外 fixed 态等待，不影响可见视口、无闪烁。 */
+    async #settleViewWidth(view) {
+        const doc = view?.document
+        if (!doc) return
+        try { await doc.fonts.ready } catch (_) {}
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        let last = view.contentPages
+        let stable = 0
+        // 最多 1.5s：等 contentPages 连续稳定(≥2 次相同)才认为真正定稿
+        for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 50))
+            const now = view.contentPages
+            if (now === last && now > 0) {
+                if (++stable >= 2) break
+            } else {
+                last = now
+                stable = 0
+            }
+        }
+        try { window.EPUBBridge?.log?.('[stl] idx=' + view.index + ' cpFinal=' + view.contentPages) } catch (_) {}
     }
     /** 在长条最左（视口上方）装入章节后的锚定补偿：视口内容不动、不闪。 */
     #compensatePrepend(view) {
