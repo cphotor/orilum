@@ -739,7 +739,15 @@ const toast = msg => {
 window.folioWebView = {
   next: () => view.goRight().then(() => log('next')),
   prev: () => view.goLeft().then(() => log('prev')),
-  getLocation: () => JSON.stringify(view.lastLocation ?? {}),
+  getLocation: () => {
+    // [保存侧诊断] 记录最终物理页码，与恢复后的 settled 对比，判断偏差出在保存还是恢复。
+    try {
+      const r = view?.renderer
+      log(`save:idx=${view.lastLocation?.index ?? '?'} page=${r?.page ?? '?'} of ${r?.pages ?? '?'} scroll=${Math.round(r?.containerPosition ?? 0)} ` +
+        `cfi=${view.lastLocation?.cfi ?? '?'}`)
+    } catch (_) {}
+    return JSON.stringify(view.lastLocation ?? {})
+  },
 }
 
 const log = msg => {
@@ -2368,14 +2376,25 @@ async function loadBook(path) {
     const s = EPUBBridge.getSavedLocator()
     if (s) last = JSON.parse(s)
   }
+  // [定位修复诊断] 打印"上次保存的定位"，与恢复后 settled 对比，判断偏差与走了哪个分支
+  try {
+    log(`restore:saved cfi=${last?.cfi ?? 'none'} fraction=${last?.fraction ?? 'none'} index=${last?.section?.current ?? 'none'}`)
+  } catch (_) {}
   // 并行提前解出封面垫底：不等整本 view.open 完成，尽早把封面呈现出来，避免首屏长时间白屏转圈
   preloadCover(file)
   await view.open(file)
+  // 排版+恢复期间先用遮罩盖住正文，避免未排版(小字/不折行)内容裸露抖动；
+  // presentCoverThenReading() 在 goTo 返回后接管并统一淡出，故这里先行盖住。
+  document.getElementById('loading')?.classList.add('show')
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
     log('restoring locator by cfi')
     await view.goTo(last.cfi)
-    setTimeout(() => log('settled cfi=' + (view.lastLocation?.cfi ?? 'none')), 1200)
+    setTimeout(() => {
+      const l = view.lastLocation ?? {}
+      const r = view?.renderer
+      log(`settled index=${l.section?.current ?? '?'} fraction=${l.fraction ?? '?'} cfi=${l.cfi ?? '?'} page=${r?.page ?? '?'} of ${r?.pages ?? '?'} scroll=${Math.round(r?.containerPosition ?? 0)}`)
+    }, 1200)
   } else if (last) {
     log('restoring locator (fallback fraction)')
     await view.init({ lastLocation: last, showTextStart: false })

@@ -961,6 +961,11 @@ export class Paginator extends HTMLElement {
             this.#destroyView(index)
             return
         }
+        // 邻章预排：排版定稿（字体/图片就绪、contentPages 收敛）后再拼入长条并做 prepend 补偿。
+        // 若按中途 fallback 字体的错误列数（日志里 8 页）先拼 + 补偿，随后该章收敛到 4 页时长条变窄、
+        // scroll 不同步，会把 primary 相对位置顶偏（恢复/跳转错位到末页）。排完再拼则恒用最终宽度。
+        // 主章不走此路径（#goTo 里已 settle），此处仅作用于 preload 的邻章，且不阻塞首屏揭盖。
+        if (index !== this.#primaryIndex) await this.#settleLayout(view)
         // 排完即拼入长条：从屏外 fixed 转为 relative → 进入 flex 布局
         Object.assign(view.element.style, {
             position: 'relative', left: 'auto', top: 'auto',
@@ -979,7 +984,8 @@ export class Paginator extends HTMLElement {
     /** 在长条最左（视口上方）装入章节后的锚定补偿：视口内容不动、不闪。 */
     #compensatePrepend(view) {
         const startBefore = this.#renderedStart
-        const addedSize = view.element.getBoundingClientRect()[this.sideProp]
+        // 用逻辑确定性宽度（contentPages×size），与 #getViewOffset 前缀和严格自洽，杜绝实测 DOM 瞬时宽度（未定稿列数）造成的补偿错位。
+        const addedSize = (view.contentPages || 0) * this.size
         const correction = startBefore + addedSize - this.#renderedStart
         if (Math.abs(correction) > 0.5) {
             this.containerPosition += (this.#vertical ? -1 : 1) * correction
@@ -1395,6 +1401,35 @@ export class Paginator extends HTMLElement {
         }
         return this.#scrollTo(offset, reason, smooth)
     }
+    /** 等待主章排版完全定稿后再锚定。
+     *  字体/图片加载会让 contentPages 重排（日志里往往 1→3→4 页）；若按中途页数计算滚动，
+     *  重排后 scroll 会错位到章末/前一章。已定稿的邻章（字体就绪）几乎不增加耗时。
+     *  供恢复/目录/书签/批注/链接等所有锚点归位共用。 */
+    async #settleLayout(view) {
+        const doc = view?.document
+        if (!doc) return
+        // 字体就绪是 contentPages 重排的主异步源，设上限防个别字体加载卡死流程。
+        try {
+            if (doc.fonts?.ready)
+                await Promise.race([doc.fonts.ready, wait(2000)])
+        } catch (_) {}
+        // 图片解码撑高也会改变页数，逐个等（失败忽略），配合上面的字体等待一次收敛。
+        try {
+            await Promise.all([...doc.images].map(i =>
+                i.complete ? undefined : (i.decode?.() ?? Promise.resolve()).catch(() => {})))
+        } catch (_) {}
+        // 前述等待已让 ResizeObserver/expand 触发重排落地；再空转数帧观察 contentPages 收敛。
+        // 不主动重复 expand()：避免"排版中途反复重绘 → 先显示未排版、再刷成定稿"的闪烁。
+        await new Promise(resolve => {
+            let last = view.contentPages, rounds = 0
+            const tick = () => {
+                const cur = view.contentPages
+                if (++rounds > 12 || cur === last) resolve()
+                else { last = cur; requestAnimationFrame(tick) }
+            }
+            requestAnimationFrame(tick)
+        })
+    }
     async scrollToAnchor(anchor, select) {
         return this.#scrollToAnchor(anchor, select ? 'selection' : 'navigation')
     }
@@ -1533,6 +1568,9 @@ export class Paginator extends HTMLElement {
             position: 'relative', left: 'auto', top: 'auto',
         })
         const primaryView = this.#primaryView
+        // 等主章排版定稿后再锚定：避免按中途页数计算滚动、重排后 scroll 错位。
+        // 这是恢复/目录/书签/批注/链接共用的归位路径；预排/拼接是另一套流程，不受影响。
+        await this.#settleLayout(primaryView)
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
