@@ -22,7 +22,7 @@ import com.orilum.data.font.FontFace
  */
 @Database(
     entities = [Book::class, BookReadingState::class, FontFace::class],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -122,6 +122,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v8：书架增强——Book 增加 `coverPath`(封面本地私有路径) 与 `readTime`(最近阅读时间戳) 两列。
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                runCatching { db.execSQL("ALTER TABLE books ADD COLUMN coverPath TEXT") }
+                runCatching { db.execSQL("ALTER TABLE books ADD COLUMN readTime INTEGER") }
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -131,7 +141,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DB_NAME,
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
             }
     }
 }

@@ -1,6 +1,7 @@
 package com.orilum
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -15,8 +16,12 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -24,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -43,6 +49,9 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -73,10 +82,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 
 import androidx.compose.ui.platform.LocalContext
@@ -104,7 +118,9 @@ import com.orilum.ui.reader.EXTRA_BOOK_PATH
 import com.orilum.ui.reader.ReaderActivity
 import com.orilum.ui.theme.OrilumTheme
 import com.orilum.util.FileLogger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import java.io.File
@@ -125,7 +141,6 @@ class MainActivity : ComponentActivity() {
 
     private val repository by lazy { BookRepository(AppDatabase.get(this).bookDao()) }
     private val importer by lazy { BookImporter(this, repository) }
-    private val booksFlow by lazy { repository.books() }
 
     /** 阅读配置；autoContinue 决定启动书架时是否自动进入最后阅读的书。 */
     private val settingsStore by lazy { ReaderSettingsStore(File(filesDir, "settings")) }
@@ -155,7 +170,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             OrilumTheme {
-                var gridMode by rememberSaveable { mutableStateOf(false) }
+                // 视图三态：窗格(封面网格) → 带图列表 → 纯文本列表，循环切换。
+                var view by rememberSaveable { mutableStateOf(ShelfView.TextList) }
+                // 排序：加入时间 / 阅读时间 / 书名。
+                var sortName by rememberSaveable { mutableStateOf(BookRepository.Sort.Added.name) }
+                // 编辑模式 + 多选删除。
+                var editMode by rememberSaveable { mutableStateOf(false) }
+                var selected by rememberSaveable { mutableStateOf(emptySet<Long>()) }
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 val pickEpub = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenMultipleDocuments(),
@@ -163,16 +184,40 @@ class MainActivity : ComponentActivity() {
                     if (uris.isNotEmpty()) onBooksPicked(uris)
                 }
 
-                val books by booksFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+                val sort = BookRepository.Sort.valueOf(sortName)
+                val books by remember(sort) { repository.books(sort) }
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
 
                 // 书架整屏为底层。设置面板以「右侧滑出抽屉」叠加于 Scaffold 的内容区之上——
                 // 其高度自动=「顶栏下方 → 底栏上方」的内容区高，绝不写死。
                 ShelfScreen(
                     books = books,
-                    gridMode = gridMode,
-                    onToggleView = { gridMode = !gridMode },
+                    view = view,
+                    sortName = sortName,
+                    editMode = editMode,
+                    selected = selected,
+                    onToggleView = {
+                        view = when (view) {
+                            ShelfView.Grid -> ShelfView.CoverList
+                            ShelfView.CoverList -> ShelfView.TextList
+                            ShelfView.TextList -> ShelfView.Grid
+                        }
+                    },
+                    onSortChange = { sortName = it },
                     onImport = { pickEpub.launch(arrayOf("application/epub+zip")) },
-                    onEdit = { toast("编辑（占位）") },
+                    onEdit = {
+                        editMode = !editMode
+                        if (!editMode) selected = emptySet()
+                    },
+                    onToggleSelect = { id ->
+                        selected = if (id in selected) selected - id else selected + id
+                    },
+                    onDelete = {
+                        val toDelete = books.filter { it.id in selected }
+                        lifecycleScope.launch { toDelete.forEach { repository.removeBook(it) } }
+                        selected = emptySet()
+                        editMode = false
+                    },
                     onSettings = { showSettings = !showSettings },
                     onOpenBook = { openReader(it) },
                     fontRepository = fontRepository,
@@ -209,6 +254,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openReader(book: Book) {
+        // 记录打开时间 → 刷新「按阅读时间近→远」排序
+        lifecycleScope.launch { repository.touchRead(book.id) }
         // 记录最后打开的书，供「打开时续读」下次冷启动自动进入
         prefs.edit().putLong(KEY_LAST_BOOK_ID, book.id).apply()
         startActivity(
@@ -286,7 +333,129 @@ private fun RowScope.ToolItem(icon: ImageVector, label: String, onClick: () -> U
     }
 }
 
-/** 书架卡片：书名 + 作者。 */
+/** 书架视图三态：封面窗格 → 带图列表 → 纯文本列表，由底部「封面/列表」按钮循环切换。 */
+private enum class ShelfView { Grid, CoverList, TextList }
+
+/** 尺寸受限的封面缩略图（导入时已缩到 ~720px）。无封面/加载失败时用书名灰底占位。 */
+@androidx.compose.runtime.Composable
+private fun CoverThumb(book: Book, contentScale: ContentScale, modifier: Modifier = Modifier) {
+    val key = book.coverPath
+    val bmp by produceState<ImageBitmap?>(null, key) {
+        value = if (key == null) null else withContext(Dispatchers.IO) {
+            runCatching { BitmapFactory.decodeFile(key)?.asImageBitmap() }.getOrNull()
+        }
+    }
+    val b = bmp
+    if (b != null) {
+        Image(
+            bitmap = b,
+            contentDescription = book.title,
+            modifier = modifier,
+            contentScale = contentScale,
+        )
+    } else {
+        // 占位：灰底 + 书名首字
+        Box(
+            modifier = modifier.then(Modifier.background(Color(0xFFEFECE4))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = book.title.take(1),
+                fontSize = 28.sp,
+                color = Color(0xFF888888),
+            )
+        }
+    }
+}
+
+/** 窗格项：2:3 书封 + 下方书名；编辑态选中时封面描边高亮。 */
+@androidx.compose.runtime.Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun BookCoverGridItem(
+    book: Book,
+    editMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
+        CoverThumb(
+            book = book,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(6.dp))
+                .then(if (selected) Modifier.border(3.dp, Color(0xFF3B82F6), RoundedCornerShape(6.dp)) else Modifier),
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = book.title,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = BarGrayFg,
+        )
+        // 编辑态非选中时悬浮一个淡圈提示「可点选」。
+        if (editMode && !selected) {}
+    }
+}
+
+/** 带图列表行：左封面缩略(约 2:3)、右书名+作者。 */
+@androidx.compose.runtime.Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun CoverListRow(
+    book: Book,
+    editMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .then(if (selected) Modifier.background(Color(0x142563F7)) else Modifier)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CoverThumb(
+            book = book,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(52.dp, 78.dp)
+                .clip(RoundedCornerShape(4.dp)),
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = book.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = BarGrayFg,
+            )
+            book.author?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (editMode) {
+            Text(
+                text = if (selected) "✓" else "○",
+                fontSize = 22.sp,
+                color = if (selected) Color(0xFF2563F7) else Color(0xFFBBBBBB),
+            )
+        }
+    }
+}
 @androidx.compose.runtime.Composable
 private fun BookCard(book: Book, onClick: () -> Unit) {
     Card(
@@ -314,9 +483,15 @@ private fun BookCard(book: Book, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 private fun ShelfScreen(
     books: List<Book>,
-    gridMode: Boolean,
+    view: ShelfView,
+    sortName: String,
+    editMode: Boolean,
+    selected: Set<Long>,
     onToggleView: () -> Unit,
+    onSortChange: (String) -> Unit,
     onImport: () -> Unit,
+    onToggleSelect: (Long) -> Unit,
+    onDelete: () -> Unit,
     onEdit: () -> Unit,
     onSettings: () -> Unit,
     onOpenBook: (Book) -> Unit,
@@ -325,6 +500,11 @@ private fun ShelfScreen(
     onDismissSettings: () -> Unit,
 ) {
     // 系统栏图标深色已在 MainActivity.onCreate 统一设置（见 enableEdgeToEdge 后），此处无需重复。
+    // 本卡片的点按语义：编辑模式下 = 选择切换；否则 = 打开书。
+    val onItemClick: (Book) -> Unit = {
+        if (editMode) onToggleSelect(it.id) else onOpenBook(it)
+    }
+    val onItemLongClick: (Book) -> Unit = { if (!editMode) onToggleSelect(it.id) }
 
     Scaffold(
         containerColor = Color.White,
@@ -346,7 +526,48 @@ private fun ShelfScreen(
                         fontSize = 19.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = BarGrayFg,
+                        modifier = Modifier.weight(1f),
                     )
+                    if (editMode) {
+                        // 编辑模式：右侧显示已选数量与「完成」。
+                        Text(
+                            text = "已选 ${selected.size}",
+                            fontSize = 13.sp,
+                            color = BarGrayFg,
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                        Text(
+                            text = "完成",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = BarGrayFg,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = { onEdit() })
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    } else {
+                        // 排序选择（加入时间 / 阅读时间 / 书名）。
+                        val sortLabel = when (sortName) {
+                            BookRepository.Sort.Read.name -> "阅读时间"
+                            BookRepository.Sort.Name.name -> "书名"
+                            else -> "加入时间"
+                        }
+                        val nextSort = when (sortName) {
+                            BookRepository.Sort.Added.name -> BookRepository.Sort.Read
+                            BookRepository.Sort.Read.name -> BookRepository.Sort.Name
+                            else -> BookRepository.Sort.Added
+                        }
+                        Text(
+                            text = sortLabel + " ▼",
+                            fontSize = 14.sp,
+                            color = BarGrayFg,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { if (!settingsOpen) onSortChange(nextSort.name) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
         },
@@ -357,9 +578,12 @@ private fun ShelfScreen(
                 Row(modifier = Modifier.fillMaxWidth().height(56.dp)) {
                     // 面板开着时，点底部任一功能按钮只先关面板（呈模态：书架除关闭外暂不可操作）；
                     // 「设置」按钮本身为开关切换，交由 onSettings 处理，不在此拦截。
-                    ToolItem(icon = if (gridMode) Icons.Default.List else ImageVector.vectorResource(R.drawable.ic_grid), label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
+                    ToolItem(icon = when (view) {
+                        ShelfView.Grid -> Icons.Default.List
+                        else -> ImageVector.vectorResource(R.drawable.ic_grid)
+                    }, label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
                     ToolItem(icon = Icons.Default.Add, label = "导入", onClick = { if (settingsOpen) onDismissSettings() else onImport() })
-                    ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = { if (settingsOpen) onDismissSettings() else onEdit() })
+                    ToolItem(icon = Icons.Default.Edit, label = if (editMode) "删除" else "编辑", onClick = { if (settingsOpen) onDismissSettings() else if (editMode) onDelete() else onEdit() })
                     ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
                 }
                 // 底部安全间距：该设备系统导航栏 inset 极小，取一半即可让按钮行避开系统栏，且几乎不留空白。
@@ -379,16 +603,62 @@ private fun ShelfScreen(
                     Text(text = "书架上还没有书", style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(books, key = { it.id }) { book ->
-                        // 面板打开时书不可点（与底部功能按钮同呈模态），点书仅关闭面板。
-                        BookCard(book = book, onClick = {
-                            if (settingsOpen) onDismissSettings() else onOpenBook(book)
-                        })
+                when (view) {
+                    // 窗格：封面网格（平板 4 列 / 手机 2 列，2:3 书封比例）
+                    ShelfView.Grid -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(
+                            with(androidx.compose.ui.platform.LocalConfiguration.current) {
+                                if (screenWidthDp >= 600) 4 else 2
+                            }
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                    ) {
+                        items(books, key = { it.id }) { book ->
+                            val sel = book.id in selected
+                            BookCoverGridItem(
+                                book = book,
+                                editMode = editMode,
+                                selected = sel,
+                                onClick = { if (editMode) onToggleSelect(book.id) else onOpenBook(book) },
+                                onLongClick = { if (!editMode) onToggleSelect(book.id) },
+                            )
+                        }
+                    }
+                    // 带图列表：左封面缩略、右书名+作者
+                    ShelfView.CoverList -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(books, key = { it.id }) { book ->
+                            val sel = book.id in selected
+                            CoverListRow(
+                                book = book,
+                                editMode = editMode,
+                                selected = sel,
+                                onClick = {
+                                    if (settingsOpen) onDismissSettings()
+                                    else if (editMode) onToggleSelect(book.id) else onOpenBook(book)
+                                },
+                                onLongClick = { if (!editMode) onToggleSelect(book.id) },
+                            )
+                        }
+                    }
+                    // 纯文本列表（沿用原 BookCard）
+                    ShelfView.TextList -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(books, key = { it.id }) { book ->
+                            // 面板打开时书不可点（与底部功能按钮同呈模态），点书仅关闭面板。
+                            BookCard(book = book, onClick = {
+                                if (settingsOpen) onDismissSettings() else onOpenBook(book)
+                            })
+                        }
                     }
                 }
             }

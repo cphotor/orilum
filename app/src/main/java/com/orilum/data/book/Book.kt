@@ -19,4 +19,8 @@ data class Book(
     val author: String? = null,
     val filePath: String,
     val addedAt: Long = System.currentTimeMillis(),
+    /** 封面图本地私有路径（导入时从 EPUB 提取缓存）；无封面为 null。 */
+    val coverPath: String? = null,
+    /** 最近一次打开阅读的时间戳（ms）；用于「按阅读时间近→远」排序。 */
+    val readTime: Long? = null,
 )
