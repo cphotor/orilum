@@ -988,6 +988,12 @@ export class Paginator extends HTMLElement {
         const addedSize = (view.contentPages || 0) * this.size
         const correction = startBefore + addedSize - this.#renderedStart
         if (Math.abs(correction) > 0.5) {
+            // 大补偿（巨型前章 prepend，scroll 一次跨数十万 px）：先强制同步 reflow 让 flex 长条纳入新章，
+            // 再设 scroll，浏览器同一帧渲染最终态，避免"scroll 已大步设定、布局未到位"的中间帧（跳转后闪一下）。
+            if (Math.abs(correction) > this.size * 2) {
+                void this.#container[(this.#vertical ? 'offsetHeight' : 'offsetWidth')]
+                try { window.EPUBBridge?.log?.('[cmp] big reflow correction=' + Math.round(correction)) } catch (_) {}
+            }
             this.containerPosition += (this.#vertical ? -1 : 1) * correction
             // 补偿已改变 scroll：必须同步刷新 scrollBounds，否则拖动/吸附仍用装章前的旧 offset 基准，
             // 一次 clamp 就把视口拽回长条前部（跳到上一章的区域）。
@@ -1418,14 +1424,21 @@ export class Paginator extends HTMLElement {
             await Promise.all([...doc.images].map(i =>
                 i.complete ? undefined : (i.decode?.() ?? Promise.resolve()).catch(() => {})))
         } catch (_) {}
-        // 前述等待已让 ResizeObserver/expand 触发重排落地；再空转数帧观察 contentPages 收敛。
+        // 前述等待已让 ResizeObserver/expand 触发重排落地；再空转观察 contentPages 收敛。
         // 不主动重复 expand()：避免"排版中途反复重绘 → 先显示未排版、再刷成定稿"的闪烁。
+        // 大章(contentPages 大、持续增长如 216→277)需更久才收敛：改为"连续 3 帧不再变化"才放行，
+        // 并用较宽的帧数上限(约1.5s)兜底，避免"未定稿就锚定、字体/图片陆续就绪后 scroll 再跳"。
         await new Promise(resolve => {
-            let last = view.contentPages, rounds = 0
+            let last = view.contentPages, stable = 0
+            let rounds = 0
+            const maxRounds = 90
             const tick = () => {
                 const cur = view.contentPages
-                if (++rounds > 12 || cur === last) resolve()
-                else { last = cur; requestAnimationFrame(tick) }
+                if (cur === last) stable++
+                else { last = cur; stable = 0 }
+                if ((rounds > 5 && stable >= 3) || rounds > maxRounds) return resolve()
+                rounds++
+                requestAnimationFrame(tick)
             }
             requestAnimationFrame(tick)
         })
@@ -1568,12 +1581,18 @@ export class Paginator extends HTMLElement {
             position: 'relative', left: 'auto', top: 'auto',
         })
         const primaryView = this.#primaryView
+        // 等主章排版定稿（字体/图片就绪、contentPages 收敛）后再锚定。
+        // 否则重开时主章先以 fallback 字体排版（行距/段距更大），与目录跳转(真实字体)的版式不一致，
+        // 保存的定位(真实字体)套在 fallback 版式上会偏移。bootMask/封面此刻已盖住全程，等待不外露。
+        // 已就绪的邻章(翻页/目录) fonts.ready 立即 resolve，几乎不增加耗时。
+        await this.#settleLayout(primaryView)
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
         this.#snap('go' + index)
         this.#stabilizing = false
-        this.#scheduleAllPreload()
+        // 锚定后的首帧先稳定渲染，再进行邻章预排（prepend 补偿会动 scroll），避免与首帧交叠引起闪动
+        setTimeout(() => this.#scheduleAllPreload(), 16)
         if (hasFocus) this.focusView()
     }
     async goTo(target) {
