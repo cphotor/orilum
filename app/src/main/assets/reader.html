@@ -2569,9 +2569,9 @@ function preloadCover(file) {
 function presentCoverThenReading() {
   const coverEl = document.getElementById('cover')
   const showLoading = () => document.getElementById('loading')?.classList.add('show')
-  // 开场停留时长：open→目标章排版+定位恢复这段空白已由 bootMask/封面垫底盖满，
-  // 此处(就绪后)只需保留封面淡入的短停留(与 #cover 0.7s 过渡一致)，不再额外等固定 1.5s。
-  const hold = 700
+  // 开场停留时长：open→目标章排版+定位恢复这段空白已由 bootMask/封面盖满，就绪后即揭盖。
+  // 只留一小截(约两帧)让封面先渲染一帧，再用 #cover 的 0.7s 过渡柔和淡出承接，不再额外多停留。
+  const hold = 120
   let scheduled = false
   const scheduleDismiss = () => {
     if (scheduled) return
