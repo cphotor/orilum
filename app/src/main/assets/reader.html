@@ -2461,6 +2461,14 @@ const isCoverLikeDoc = doc => {
 }
 /** 取书封面图 blob：优先用并行 preloadCover 已解出的 pendingCoverBlob，否则回调 book.getCover() 兜底。 */
 const getBookCoverBlob = async book => {
+  // preloadCover 已并行解封面（extractCoverBlob 的探测比 getCover 更全）：优先等它，成功即用，失败再兜底 getCover。
+  // 之前只读 pendingCoverBlob，常因它未就绪 → 拿到 null → case2 不合成封面页。
+  if (pendingCoverPromise) {
+    try {
+      const b = await pendingCoverPromise
+      if (b) return b
+    } catch (_) {}
+  }
   if (pendingCoverBlob) return pendingCoverBlob
   try { return await book.getCover?.() ?? null } catch (_) { return null }
 }
@@ -2501,17 +2509,26 @@ const makeCoverSection = async blob => {
 /** 开书前统一处理全屏封面（见上方注释；无封面图的书不插、不显示白屏）。 */
 const insertCoverSection = async book => {
   if (!book?.sections?.length) return
-  // Spine[0] 已是大图封面 → Problem 1，交由 paginator.isCoverLike 全屏，不重复合成
-  try {
-    const doc = await book.sections[0].createDocument?.()
-    if (isCoverLikeDoc(doc)) return
-  } catch (_) {}
-  // 其余：书有封面图才合成全屏封面插入首位（index 0）
+  // 书有封面图才处理（无封面 → case1，不动 spine）
   const blob = await getBookCoverBlob(book)
   if (!blob || typeof blob.arrayBuffer !== 'function') return
+  // 判定 spine[0] 是否「封面章」（以封面大图为主、几乎无正文）
+  let spine0IsCoverLike = false
+  try {
+    const doc = await book.sections[0].createDocument?.()
+    spine0IsCoverLike = isCoverLikeDoc(doc)
+  } catch (_) {}
   const section = await makeCoverSection(blob)
-  book.sections.unshift(section)
-  log('[cover] 合成全屏封面已插入 spine 首位 (index 0)')
+  if (spine0IsCoverLike) {
+    // case3：spine[0] 本来就是封面章 → 用「标准全屏封面」整体替换它，
+    // 避免「合成全屏封面 + 原始非全屏封面」双份；也修复 gimp 这类「写错/分页出空首列」的 malformed 封面章。
+    book.sections[0] = section
+    log('[cover] spine[0] 封面章已改为标准全屏封面')
+  } else {
+    // case2：spine[0] 是正文首页 → 合成全屏封面插到首位(index 0)，作为可来回翻页的正文首页
+    book.sections.unshift(section)
+    log('[cover] 合成全屏封面已插入 spine 首位 (index 0)')
+  }
 }
 
 /** 淡出并移除打开书时的「正在加载中」遮罩；已显示的淡出后再移除，未显示的（未 .show）直接移除。 */
@@ -2538,6 +2555,7 @@ function dismissOpening() {
 
 let COVER_SHOWN = false // 封面是否已垫底显示（preloadCover / getCover 任一先命中即置位，避免重复）
 let pendingCoverBlob = null // preloadCover 提前解出的封面 blob 暂存：settings 就绪后才统一显示，避免"先白边再跳全屏"
+let pendingCoverPromise = null // preloadCover 的提取 promise：insertCoverSection 等它，避免「blob 未就绪 → case2 不插封面」的时序竞争
 
 /** 把封面图整屏垫底并叠上加载动画。可安全重复调用（一次性）。 */
 function showCover(blob) {
@@ -2625,15 +2643,17 @@ async function extractCoverBlob(file) {
  *  presentCoverThenReading 统一按「封面等比例缩放」开关显示，避免 settings 未加载时先用默认
  *  等比(白边)显示、settings 就绪后再切拉伸造成的"先白边再跳全屏"。失败静默（getCover 兜底）。 */
 function preloadCover(file) {
-    extractCoverBlob(file).then(b => {
-      pendingCoverBlob = b ?? null
-      log('[boot] preloadCover 就绪 hasCover=' + (b ? 'yes' : 'no'))
-      // settings 已提前同步就绪 → 立即垫封面盖住 open（用正确开关，无"先默认后跳变"）。
-      // 无封面则确保仍有实体 loading 盖住；都由 present 统一揭盖。
-      if (b) showCover(b)
-      else bootMask()
-    })
-    .catch(() => { /* 忽略 */ })
+    pendingCoverPromise = extractCoverBlob(file)
+      .then(b => {
+        pendingCoverBlob = b ?? null
+        log('[boot] preloadCover 就绪 hasCover=' + (b ? 'yes' : 'no'))
+        // settings 已提前同步就绪 → 立即垫封面盖住 open（用正确开关，无"先默认后跳变"）。
+        // 无封面则确保仍有实体 loading 盖住；都由 present 统一揭盖。
+        if (b) showCover(b)
+        else bootMask()
+        return b ?? null
+      })
+      .catch(() => { pendingCoverBlob = null; return null })
 }
 
 /** 打开书后的开场动画：
