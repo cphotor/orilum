@@ -58,9 +58,13 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -96,6 +100,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -212,6 +217,14 @@ class MainActivity : ComponentActivity() {
                     onToggleSelect = { id ->
                         selected = if (id in selected) selected - id else selected + id
                     },
+                    onLongPressBook = { id ->
+                        if (!editMode) editMode = true
+                        selected = selected + id
+                    },
+                    onSelectAll = {
+                        selected = if (selected.size == books.size) emptySet() else books.mapTo(mutableSetOf()) { it.id }
+                    },
+                    onGroup = { toast("分组（占位）") },
                     onDelete = {
                         val toDelete = books.filter { it.id in selected }
                         lifecycleScope.launch { toDelete.forEach { repository.removeBook(it) } }
@@ -457,17 +470,31 @@ private fun CoverListRow(
     }
 }
 @androidx.compose.runtime.Composable
-private fun BookCard(book: Book, onClick: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun BookCard(book: Book, editMode: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (selected) Modifier.background(Color(0x142563F7)) else Modifier)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = book.title, style = MaterialTheme.typography.titleMedium)
-            book.author?.let {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = book.title, style = MaterialTheme.typography.titleMedium)
+                book.author?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // 编辑态右侧选中指示，与 CoverListRow 同风格。
+            if (editMode) {
                 Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = if (selected) "✓" else "○",
+                    fontSize = 22.sp,
+                    color = if (selected) Color(0xFF2563F7) else Color(0xFFBBBBBB),
                 )
             }
         }
@@ -491,6 +518,9 @@ private fun ShelfScreen(
     onSortChange: (String) -> Unit,
     onImport: () -> Unit,
     onToggleSelect: (Long) -> Unit,
+    onLongPressBook: (Long) -> Unit,
+    onSelectAll: () -> Unit,
+    onGroup: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onSettings: () -> Unit,
@@ -501,11 +531,6 @@ private fun ShelfScreen(
 ) {
     // 系统栏图标深色已在 MainActivity.onCreate 统一设置（见 enableEdgeToEdge 后），此处无需重复。
     // 本卡片的点按语义：编辑模式下 = 选择切换；否则 = 打开书。
-    val onItemClick: (Book) -> Unit = {
-        if (editMode) onToggleSelect(it.id) else onOpenBook(it)
-    }
-    val onItemLongClick: (Book) -> Unit = { if (!editMode) onToggleSelect(it.id) }
-
     Scaffold(
         containerColor = Color.White,
         topBar = {
@@ -521,32 +546,37 @@ private fun ShelfScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Start,
                 ) {
-                    Text(
-                        text = "书架",
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = BarGrayFg,
-                        modifier = Modifier.weight(1f),
-                    )
                     if (editMode) {
-                        // 编辑模式：右侧显示已选数量与「完成」。
+                        // 编辑态标题栏：左上「返回书架」按钮退出编辑（回到书架），右侧显示已选数量。
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回",
+                                tint = BarGrayFg,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onEdit() }
+                                    .padding(8.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "返回书架",
+                                fontSize = 16.sp,
+                                color = BarGrayFg,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onEdit() }
+                                    .padding(vertical = 6.dp),
+                            )
+                        }
+                    } else {
                         Text(
-                            text = "已选 ${selected.size}",
-                            fontSize = 13.sp,
-                            color = BarGrayFg,
-                            modifier = Modifier.padding(end = 12.dp),
-                        )
-                        Text(
-                            text = "完成",
-                            fontSize = 16.sp,
+                            text = "书架",
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = BarGrayFg,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = { onEdit() })
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f),
                         )
-                    } else {
                         // 排序选择（加入时间 / 阅读时间 / 书名）。
                         val sortLabel = when (sortName) {
                             BookRepository.Sort.Read.name -> "阅读时间"
@@ -568,6 +598,17 @@ private fun ShelfScreen(
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                         )
                     }
+                    if (editMode) {
+                        // 在「返回书架」与「已选数」之间空出弹性空间，让计数靠右显示、二者拉开距离。
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "已选 ${selected.size}",
+                            fontSize = 13.sp,
+                            color = BarGrayFg,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
                 }
             }
         },
@@ -576,16 +617,27 @@ private fun ShelfScreen(
             Column(modifier = Modifier.fillMaxWidth().background(BarGray)) {
                 // 按钮行高 56dp 足够容纳「图标+文字」整块并垂直居中；行内上下留白保持紧凑，避免按钮下方出现过多空白。
                 Row(modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    // 面板开着时，点底部任一功能按钮只先关面板（呈模态：书架除关闭外暂不可操作）；
-                    // 「设置」按钮本身为开关切换，交由 onSettings 处理，不在此拦截。
-                    ToolItem(icon = when (view) {
-                        ShelfView.Grid -> Icons.Default.List
-                        else -> ImageVector.vectorResource(R.drawable.ic_grid)
-                    }, label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
-                    ToolItem(icon = Icons.Default.Add, label = "导入", onClick = { if (settingsOpen) onDismissSettings() else onImport() })
-                    ToolItem(icon = Icons.Default.Edit, label = if (editMode) "删除" else "编辑", onClick = { if (settingsOpen) onDismissSettings() else if (editMode) onDelete() else onEdit() })
-                    ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
-                }
+                        if (editMode) {
+                            // 编辑态工具栏：全选 / 分组(占位) / 删除。
+                            ToolItem(
+                                icon = if (selected.size == books.size) Icons.Default.Check else Icons.Default.Menu,
+                                label = "全选",
+                                onClick = { if (selected.size == books.size) {} else onSelectAll() },
+                            )
+                            ToolItem(icon = Icons.Default.Menu, label = "分组", onClick = onGroup)
+                            ToolItem(icon = Icons.Default.Delete, label = "删除", onClick = onDelete)
+                        } else {
+                            // 面板开着时，点底部任一功能按钮只先关面板（呈模态：书架除关闭外暂不可操作）；
+                            // 「设置」按钮本身为开关切换，交由 onSettings 处理，不在此拦截。
+                            ToolItem(icon = when (view) {
+                                ShelfView.Grid -> Icons.Default.List
+                                else -> ImageVector.vectorResource(R.drawable.ic_grid)
+                            }, label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
+                            ToolItem(icon = Icons.Default.Add, label = "导入", onClick = { if (settingsOpen) onDismissSettings() else onImport() })
+                            ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = { if (settingsOpen) onDismissSettings() else onEdit() })
+                            ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
+                        }
+                    }
                 // 底部安全间距：该设备系统导航栏 inset 极小，取一半即可让按钮行避开系统栏，且几乎不留空白。
                 val navBottom = WindowInsets.navigationBars.getBottom(LocalDensity.current)
                 Spacer(modifier = Modifier.height((navBottom / 2).dp))
@@ -623,7 +675,7 @@ private fun ShelfScreen(
                                 editMode = editMode,
                                 selected = sel,
                                 onClick = { if (editMode) onToggleSelect(book.id) else onOpenBook(book) },
-                                onLongClick = { if (!editMode) onToggleSelect(book.id) },
+                                onLongClick = { onLongPressBook(book.id) },
                             )
                         }
                     }
@@ -643,7 +695,7 @@ private fun ShelfScreen(
                                     if (settingsOpen) onDismissSettings()
                                     else if (editMode) onToggleSelect(book.id) else onOpenBook(book)
                                 },
-                                onLongClick = { if (!editMode) onToggleSelect(book.id) },
+                                onLongClick = { onLongPressBook(book.id) },
                             )
                         }
                     }
@@ -655,9 +707,16 @@ private fun ShelfScreen(
                     ) {
                         items(books, key = { it.id }) { book ->
                             // 面板打开时书不可点（与底部功能按钮同呈模态），点书仅关闭面板。
-                            BookCard(book = book, onClick = {
-                                if (settingsOpen) onDismissSettings() else onOpenBook(book)
-                            })
+                            BookCard(
+                                book = book,
+                                editMode = editMode,
+                                selected = book.id in selected,
+                                onClick = {
+                                    if (settingsOpen) onDismissSettings()
+                                    else if (editMode) onToggleSelect(book.id) else onOpenBook(book)
+                                },
+                                onLongClick = { onLongPressBook(book.id) },
+                            )
                         }
                     }
                 }
