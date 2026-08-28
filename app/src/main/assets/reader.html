@@ -2400,8 +2400,13 @@ async function loadBook(path) {
   // 并行提前解出封面垫底：不等整本 view.open 完成，尽早把封面呈现出来，避免首屏长时间白屏转圈
   preloadCover(file)
   log('[boot] 即将 view.open（bootMask 应已盖住）')
-  await view.open(file)
-  log('[boot] view.open 完成')
+  // 先 makeBook 以在 open 前统一注入合成封面：此刻 book.sections 的章节索引将「自封面起」一致，
+  // 进度/目录/CFI 从封面(0)开始排，避免 open 之后再 unshift 导致索引整体后移错位（目录跳错/重复封面）。
+  const { makeBook } = await import('./foliate-js/view.js')
+  const book = await makeBook(file)
+  await insertCoverSection(book)
+  await view.open(book)
+  log('[boot] view.open 完成 (sections=' + (book.sections?.length ?? '?') + ')')
   if (last?.cfi) {
     // 方案A：恢复优先用 CFI 精确定位到上次字符位置，避免 fraction 二分在页边界向上取整导致的偏一页
     log('restoring locator by cfi')
@@ -2438,6 +2443,76 @@ loadBook('/book/current.epub')
     hideLoading()
     toast('打开失败: ' + (err && err.message || err))
   })
+
+// ── 全屏封面统一处理（insertCoverSection）──────────────
+// 覆盖两种首页情形：
+//  · Problem 1：Spine[0] 已是「封面大图章节」→ 不改 spine，交 paginator.isCoverLike 全屏（去边距 + 按
+//    「封面等比例缩放」开关等比/拉伸）。此路径已由 paginator 现有机制承担，此处仅在判定命中时跳过合成。
+//  · Problem 2：Spine[0] 非封面、但书里有封面图（metadata cover-image / spine 指定封面）→ 合成一张
+//    全屏封面章，插入 Spine 首位(index 0)，同样跟随同一开关等比/拉伸。
+// 时序铁律：必须在 view.open(book) **之前** unshift，使章节索引自封面起一致，避免「open 后再插入导致
+// 目录/进度/CFI 索引整体后移错位、目录跳错、重复封面」。
+/** 是否「封面节」：以一张大图/占满整页的矢量封面为主、几乎无正文（与 paginator.isCoverLike 同一判据）。 */
+const isCoverLikeDoc = doc => {
+  if (!doc?.body) return false
+  const hasVisual = doc.body.querySelector('img, svg, picture, video')
+  if (!hasVisual) return false
+  return (doc.body.textContent ?? '').trim().length < 500
+}
+/** 取书封面图 blob：优先用并行 preloadCover 已解出的 pendingCoverBlob，否则回调 book.getCover() 兜底。 */
+const getBookCoverBlob = async book => {
+  if (pendingCoverBlob) return pendingCoverBlob
+  try { return await book.getCover?.() ?? null } catch (_) { return null }
+}
+/** 构造一张全屏封面章节：
+ *  - iframe src 用「同源 blob URL 的 HTML」：data:/纯字符串作 src 在沙箱中 contentDocument 为 null，会卡死 open；
+ *  - 封面图用 objectURL 内嵌进 `<svg><image>`；
+ *  - svg 的 width/height 按图片原始尺寸写（viewBox 由 paginator.setImageSize 统一改写为全图尺寸），避免裁切/放大超屏；
+ *  - body 文本简短(<500) 且含视觉元素 <svg>, 满足 paginator.isCoverLike → 全屏去边距 + 按开关等比/拉伸。 */
+const makeCoverSection = async blob => {
+  // 读封面原始尺寸：svg 需按原始宽高设置，否则比例错/被裁切
+  let w = 1, h = 1
+  try {
+    const url = URL.createObjectURL(blob)
+    const dim = await new Promise(resolve => {
+      const im = new Image()
+      im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight })
+      im.onerror = () => resolve(null)
+      im.src = url
+    })
+    URL.revokeObjectURL(url)
+    if (dim) { w = dim.w; h = dim.h }
+  } catch (_) {}
+  const coverUrl = URL.createObjectURL(blob)
+  const html =
+    `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+    `<style>html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; }` +
+    `svg { display:block; width:100%; height:100%; }</style></head>` +
+    `<body><svg><image href="${coverUrl}" width="${w}" height="${h}"/></svg></body></html>`
+  const srcUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+  return {
+    id: 'olr-cover',
+    href: 'olr-cover.html',
+    linear: 'yes',
+    load: async () => srcUrl,
+    unload: () => {},
+  }
+}
+/** 开书前统一处理全屏封面（见上方注释；无封面图的书不插、不显示白屏）。 */
+const insertCoverSection = async book => {
+  if (!book?.sections?.length) return
+  // Spine[0] 已是大图封面 → Problem 1，交由 paginator.isCoverLike 全屏，不重复合成
+  try {
+    const doc = await book.sections[0].createDocument?.()
+    if (isCoverLikeDoc(doc)) return
+  } catch (_) {}
+  // 其余：书有封面图才合成全屏封面插入首位（index 0）
+  const blob = await getBookCoverBlob(book)
+  if (!blob || typeof blob.arrayBuffer !== 'function') return
+  const section = await makeCoverSection(blob)
+  book.sections.unshift(section)
+  log('[cover] 合成全屏封面已插入 spine 首位 (index 0)')
+}
 
 /** 淡出并移除打开书时的「正在加载中」遮罩；已显示的淡出后再移除，未显示的（未 .show）直接移除。 */
 function hideLoading() {
