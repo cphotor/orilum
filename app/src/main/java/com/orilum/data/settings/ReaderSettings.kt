@@ -13,9 +13,10 @@ import org.json.JSONObject
  *  - **用户套**：由 [ReaderSettingsStore] 存成 `filesDir/settings/reader.json`；
  *  - **一键重置**：删除用户文件 → 回退 [Companion.DEFAULT]。
  *
- * M2 字体五分类：`fontBody` 正文 / `fontTitle` 标题 / `fontCode` 代码 /
- * `fontBold` 粗体 / `fontItalic` 斜体。空串表示「跟随原书样式」，由
- * [useOriginalStyle] 总开关统一控制是否注入自定义字体。
+ * 字体替换按「元素类型」三档：`fontBody` 正文 / `fontTitle` 标题 / `fontCode` 代码，
+ * 取代旧 M2 五分类(fontBody/fontTitle/fontCode/fontBold/fontItalic，其中粗/斜不再设档)。
+ * 槽位存字体 alias，全局强制——书内对应类型的文字一律用所选本地字体；
+ * 空串 = 该类型不替换、保留原书。所有排版主题统一生效。
  */
 data class ReaderSettings(
     /** 阅读背景（内置预设名：sepia / light / dark …）。 */
@@ -33,12 +34,10 @@ data class ReaderSettings(
     val marginBottom: Int = 24,
     val marginLeft: Int = 32,
     val marginRight: Int = 32,
-    /** 正文/标题/代码/粗体/斜体字体；空串 = 跟随原书样式。 */
+    /** 字体替换·元素类型三档（alias，空串 = 该类型不替换保留原书）：正文/标题/代码。 */
     val fontBody: String = "",
     val fontTitle: String = "",
     val fontCode: String = "",
-    val fontBold: String = "",
-    val fontItalic: String = "",
     /** 【总开关】跟随原书样式；开则不注入自定义字体/字号（仅排版有效）。 */
     val useOriginalStyle: Boolean = false,
     /** L2 用户导入样式表开关（M2）。 */
@@ -94,8 +93,6 @@ data class ReaderSettings(
         put("fontBody", fontBody)
         put("fontTitle", fontTitle)
         put("fontCode", fontCode)
-        put("fontBold", fontBold)
-        put("fontItalic", fontItalic)
         put("useOriginalStyle", useOriginalStyle)
         put("useUserScripts", useUserScripts)
         put("pageAnim", pageAnim)
@@ -139,8 +136,6 @@ data class ReaderSettings(
         fontBody = overlay.fontBody ?: fontBody,
         fontTitle = overlay.fontTitle ?: fontTitle,
         fontCode = overlay.fontCode ?: fontCode,
-        fontBold = overlay.fontBold ?: fontBold,
-        fontItalic = overlay.fontItalic ?: fontItalic,
         useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
         pageAnim = overlay.pageAnim ?: pageAnim,
     )
@@ -168,8 +163,6 @@ data class ReaderSettings(
         fontBody = overlay.fontBody ?: fontBody,
         fontTitle = overlay.fontTitle ?: fontTitle,
         fontCode = overlay.fontCode ?: fontCode,
-        fontBold = overlay.fontBold ?: fontBold,
-        fontItalic = overlay.fontItalic ?: fontItalic,
         useOriginalStyle = overlay.useOriginalStyle ?: useOriginalStyle,
         pageAnim = overlay.pageAnim ?: pageAnim,
     )
@@ -260,8 +253,6 @@ data class ReaderSettings(
                     fontBody = o.optString("fontBody", d.fontBody),
                     fontTitle = o.optString("fontTitle", d.fontTitle),
                     fontCode = o.optString("fontCode", d.fontCode),
-                    fontBold = o.optString("fontBold", d.fontBold),
-                    fontItalic = o.optString("fontItalic", d.fontItalic),
                     useOriginalStyle = o.optBoolean("useOriginalStyle", d.useOriginalStyle),
                     useUserScripts = o.optBoolean("useUserScripts", d.useUserScripts),
                     pageAnim = o.optBoolean("pageAnim", d.pageAnim),

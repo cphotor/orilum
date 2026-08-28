@@ -37,12 +37,10 @@ data class BookSettings(
     val bgOverride: String? = null,
     /** 独立覆盖正文字色（hex）；空串 = 跟随 scheme 默认。 */
     val fgOverride: String? = null,
-    /** 正文/标题/代码/粗体/斜体字体；空串 = 跟随原书。 */
+    /** 字体替换·元素类型三档（alias，空串 = 该类型不替换保留原书）：正文/标题/代码。 */
     val fontBody: String? = null,
     val fontTitle: String? = null,
     val fontCode: String? = null,
-    val fontBold: String? = null,
-    val fontItalic: String? = null,
     /** 跟随原书样式总开关。 */
     val useOriginalStyle: Boolean? = null,
     /** 翻页动画（平滑滑动）。 */
@@ -70,8 +68,6 @@ data class BookSettings(
         fontBody?.let { put("fontBody", it) }
         fontTitle?.let { put("fontTitle", it) }
         fontCode?.let { put("fontCode", it) }
-        fontBold?.let { put("fontBold", it) }
-        fontItalic?.let { put("fontItalic", it) }
         useOriginalStyle?.let { put("useOriginalStyle", it) }
         pageAnim?.let { put("pageAnim", it) }
     }
@@ -109,8 +105,6 @@ data class BookSettings(
                     fontBody = if (o.has("fontBody")) o.optString("fontBody") else null,
                     fontTitle = if (o.has("fontTitle")) o.optString("fontTitle") else null,
                     fontCode = if (o.has("fontCode")) o.optString("fontCode") else null,
-                    fontBold = if (o.has("fontBold")) o.optString("fontBold") else null,
-                    fontItalic = if (o.has("fontItalic")) o.optString("fontItalic") else null,
                     useOriginalStyle = if (o.has("useOriginalStyle")) o.optBoolean("useOriginalStyle") else null,
                     pageAnim = if (o.has("pageAnim")) o.optBoolean("pageAnim") else null,
                 )
@@ -157,8 +151,6 @@ data class BookSettings(
             fontBody = rs.fontBody,
             fontTitle = rs.fontTitle,
             fontCode = rs.fontCode,
-            fontBold = rs.fontBold,
-            fontItalic = rs.fontItalic,
             useOriginalStyle = rs.useOriginalStyle,
             pageAnim = rs.pageAnim,
         )

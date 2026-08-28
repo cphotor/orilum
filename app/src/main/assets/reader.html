@@ -949,7 +949,7 @@ const defaultSettings = {
   lineSpacing: 1.6,
   // 页边距：上下左右各方向独立（px），四方向控件实时刷新
   marginTop: 24, marginBottom: 24, marginLeft: 32, marginRight: 32,
-  fontBody: '', fontTitle: '', fontCode: '', fontBold: '', fontItalic: '',
+  fontBody: '', fontTitle: '', fontCode: '', // 字体替换·元素类型三档：正文/标题/代码；'' = 该类型不替换保留原书
   // 排版主题：original(原书设置) | modern(现代) | traditional(传统)
   layoutTheme: 'original',
   pageAnim: true, autoContinue: true, pageNum: false,
@@ -1083,13 +1083,85 @@ const spriteFontFace = (alias, fam) => {
     const wv = subfamilyWeight(w.subfamily)
     const sv = subfamilyStyle(w.subfamily)
     const desc = (wv != null ? `font-weight: ${wv}; ` : '') + (sv ? `font-style: ${sv}; ` : '')
-    return `@font-face { font-family: '${alias}'; src: url('/fonts/${w.id}'); ${desc}}`
+    return `@font-face { font-family: '${alias}'; src: url('${location.origin}/fonts/${w.id}'); ${desc}}`
   })
 }
 
-const fontLabel = v => { if (!v) return '跟随原书'; const f = familyByAlias.get(v); return f ? f.name : v }
-// 字体五分类的 key -> 显示名（尽量与 top/二级页入口一致）
-const FONT_KEYS = [['fontBody', '正文'], ['fontTitle', '标题'], ['fontCode', '代码'], ['fontBold', '粗体'], ['fontItalic', '斜体']]
+const fontLabel = v => { if (!v) return '跟随原书（不替换）'; const f = familyByAlias.get(v); return f ? f.name : v }
+// 字体替换·元素类型三档：key -> 显示名。取代旧五分类(fontBody/fontTitle/fontCode/fontBold/fontItalic)。
+// 每档全局强制：书里对应类型的文字一律用所选本地字体；'' = 该类型不替换保留原书。
+const FONT_KEYS = [['fontBody', '正文'], ['fontTitle', '标题'], ['fontCode', '代码']]
+// 各档对应字体链的兜底通用族（作为字体缺失时的回退）
+const FONT_SLOT_FALLBACK = { fontBody: 'serif', fontTitle: 'sans-serif', fontCode: 'monospace' }
+// 某个档位配置后的 font-family 链（alias, 兜底通用族）；未配置 → '', 调用方跳过
+const slotFamily = slot => {
+  const a = settings[slot]
+  return a && familyByAlias.has(a) ? `'${a}', ${FONT_SLOT_FALLBACK[slot]}` : ''
+}
+// 各档在「书内无该类型显式 font-family 声明」时的兜底选择器（按元素类型常见落点）。
+// 正文兜底刻意只用「文本级」标签、避开 body/div/main/article/.content 这类宽泛容器：
+// font-family 是继承属性，给容器注入会经 CSS 继承把正文字体扩散到标题/代码，导致「改正文连标题也变」。
+const FONT_SLOT_FALLBACK_SEL = {
+  fontBody: 'p, li, .olr-para, blockquote, figcaption',
+  fontTitle: 'h1, h2, h3, h4, h5, h6, [class*="title"], [class*="heading"]',
+  fontCode: 'code, pre, kbd, samp',
+}
+// 正文档「祖先/容器泄漏源」判定：对这类选择器施加 font-family 会经 CSS 继承把正文样式扩散到标题/代码。
+// 仅当选择器本身是**裸容器**（无后代组合符/伪类的单标签或单类）才判定为泄漏源；
+// 形如 `.content p` / `main > p` 这类「容器 文本目标」的选择器仍属精确正文目标，可正常注入。
+const isBodyLeakSelector = sel => {
+  const s = String(sel || '').toLowerCase().trim()
+  if (/([\s>+~]|^[^\s>+~]*:)/.test(s)) return false // 含组合符或伪类 → 当作精确目标，不跳过
+  return /\b(body|html|main|article|aside|nav|header|footer|div|form|section)\b|\.(content|container|wrapper|main|body)\b|#(content|container|wrapper|main|body)\b/.test(s)
+}
+
+/**
+ * 元素类型判定：根据书内一条 CSS 选择器串，判断其对应元素类型（正文/标题/代码）。
+ * 优先级：代码 > 标题 > 正文（默认）。不再按字体名识别字形，回归「元素类型」直觉。
+ * 返回槽位 key（正文为兜底，总返回一档）。
+ */
+const slotOfSelector = sel => {
+  const s = String(sel || '').toLowerCase()
+  if (/\b(code|pre|kbd|samp|syntax|output|terminal|console)\b/.test(s)) return 'fontCode'
+  if (/h1|h2|h3|h4|h5|h6|t(h|)itle|heading|chapter|section|subtitle|caption|heading-\d/.test(s)) return 'fontTitle'
+  return 'fontBody'
+}
+
+// 书内字体·元素类型扫描缓存：slot -> Set<selectorText>（各声明了 font-family 的选择器，按元素类型归档）。
+// 由当前主内容 doc 扫描一次缓存（与排版主题/字号无关，单书会话内稳定）。
+// 主内容未就绪（renderer 尚无 primaryView）时保持 null，下次调用重扫。
+let fontSlotScan = null
+const scanFontSlots = () => {
+  const doc = view.renderer?.getContents?.()[0]?.doc
+  if (!doc) { fontSlotScan = null; return }
+  const map = fontSlotScan = { fontBody: new Set(), fontTitle: new Set(), fontCode: new Set() }
+  // 递归收敛一层容器规则（@media/@supports/@layer）的 children
+  const rulesOf = list => {
+    const out = []
+    const push = l => { if (!l) return; for (const r of l) out.push(r) }
+    push(list)
+    for (const r of out) if (r.cssRules) push(r.cssRules)
+    return out
+  }
+  // 遍历书内各样式表(cssRules)：只取**声明了 font-family** 的选择器，按元素类型归到对应档。
+  // 只收带字体的规则：避免 body/div 等宽泛布局规则(仅设 margin 等)被当作「正文」覆盖，
+  // 从而通过继承连累标题。跨域样式表抛错逐个跳过。
+  for (const ss of doc.styleSheets) {
+    let all
+    try { all = rulesOf(ss.cssRules) } catch (e) { continue }
+    for (const x of all) {
+      if (!x.selectorText) continue
+      const css = (x.style && x.style.cssText) || ''
+      if (!/font-family\s*:/i.test(css)) continue
+      const slot = slotOfSelector(x.selectorText)
+      // 正文档跳过「祖先/容器泄漏源」（body/main/article…）：给这些容器施加 font-family 会经
+      // CSS 继承把正文字体扩散到标题/代码，导致「改正文连标题也变」——只有标题自带 font-family 的书不受影响（与「不是每本书都变」吻合）。
+      if (slot === 'fontBody' && isBodyLeakSelector(x.selectorText)) continue
+      map[slot].add(x.selectorText)
+    }
+  }
+}
+const fontSlotSelectors = slot => fontSlotScan ? [...(fontSlotScan[slot] || [])] : []
 
 // 从后端重载字体池：刷新 FONT_CHOICES 与别名映射，并重绘已构建的选择网格。
 // （启动时先调一次；导入字体完成后经 onFontsChanged 再调。）
@@ -1185,13 +1257,12 @@ const scanSpacing = doc => {
   return out
 }
 
-// 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体五分类映射
+// 生成注入正文的排版 CSS：字号(根em 相对档位)、行距、页边距（行宽）、日夜配色(背景+文字色)、字体字形槽位映射
 //  数值安全取值：仅当传入为有限数值时返回它，否则回退默认值；0 不会被当成缺失而错误回退。
 const num = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def)
 // noParaOverride=true 为「测量模式」：暂不注入段间距规则，以便读到书内原始边距（计算比例用）。
 const buildReadingCSS = (noParaOverride = false) => {
   const { lineSpacing, layoutTheme,
-    fontBody, fontTitle, fontCode, fontBold, fontItalic,
     marginTop, marginBottom, marginLeft, marginRight } = settings
   const bodyBg = effectiveBg()
   const textColor = effectiveFg()
@@ -1214,7 +1285,8 @@ const buildReadingCSS = (noParaOverride = false) => {
   const lh = Math.max(1, lineSpacing)
   css.push(`html, body, body * { line-height: ${lh} !important; }`)
   // 排版主题 css（现代/传统段落结构 + 默认字族）。「原书设置」为空串不注入。
-  // 作为 css模板层挂底：后续「字体五分类」规则会覆盖其中的 font-family 默认值。
+  // 作为 css模板层挂底：主题里写死的通用族(sans-serif/serif/monospace)作为默认，
+  // 用户在各「元素类型档」配置的字体由下方兜底选择器以 !important 覆盖。
   const lt = LAYOUT_THEMES[layoutTheme] || LAYOUT_THEMES.original
   if (lt.css) css.push(lt.css)
   // ── 两个独立垂直间距控件 ──
@@ -1240,22 +1312,22 @@ const buildReadingCSS = (noParaOverride = false) => {
       if (decs.length) css.push(`${sel} { ${decs.join('; ')}; }`)
     }
   }
-  // 字体五分类：映射到对应元素；空串表示该分类跟随原书字体
-  const cats = [
-    ['body', fontBody, 'body, html', 'serif'],
-    ['title', fontTitle, 'h1,h2,h3,h4,h5,h6', 'sans-serif'],
-    ['code', fontCode, 'code,pre,kbd,samp', 'monospace'],
-    ['bold', fontBold, 'strong,b', 'sans-serif'],
-    ['italic', fontItalic, 'em,i', 'serif'],
-  ]
-  const mains = new Set()
-  cats.forEach(([, main]) => { if (main) mains.add(main) })
-  // 每个被命中家族注入多份 @font-face（同家族名 + 各自 font-weight/style 描述符），
-  // 让浏览器在家族内部按字重/样式自动挑文件，无需为每个字重单独配置。
-  mains.forEach(alias => { spriteFontFace(alias, familyByAlias.get(alias)).forEach(f => css.push(f)) })
-  cats.forEach(([, main, sel, fb]) => {
-    if (main && familyByAlias.has(main)) css.push(`${sel} { font-family: '${main}', ${fb}; }`)
-  })
+  // 书内/主题 CSS 生效前的保底扫描：若尚未扫过且主内容已就绪则补扫
+  if (!fontSlotScan) scanFontSlots()
+  // ── 字体替换·字形槽位（取代旧五分类）──
+  // 四个槽位（衬线/无衬线/等宽/楷书）全局强制：凡书里该字形风格的文字一律用所选本地字体；
+  // 空槽位 = 该族不替换保留原书。任何排版主题下都生效（原书主题靠扫描书内声明、主题模板靠上面的替换）。
+  // 1) 先为所有已配置槽位的字体注入 @font-face（同家族名 + 字重/样式描述符，浏览器按字重自动挑文件）
+  for (const [slot] of FONT_KEYS) { const a = settings[slot]; if (a) spriteFontFace(a, familyByAlias.get(a)).forEach(f => css.push(f)) }
+  // 2) 扫描书内 font-family 声明 → 按字形风格归槽，对相关选择器注入 !important 强制（保留原书选择器，特异性一致）
+  //    有书内声明时用它；否则按该风格常见落点兜底（衬线→正文、无衬线→标题、等宽→代码）。
+  for (const [slot] of FONT_KEYS) {
+    const fam = slotFamily(slot)
+    if (!fam) continue
+    const sels = fontSlotSelectors(slot)
+    if (sels.length) css.push(`${sels.join(',\n')} { font-family: ${fam} !important; }`)
+    else if (FONT_SLOT_FALLBACK_SEL[slot]) css.push(`${FONT_SLOT_FALLBACK_SEL[slot]} { font-family: ${fam} !important; }`)
+  }
   return css.join('\n')
 }
 
@@ -1263,6 +1335,8 @@ const buildReadingCSS = (noParaOverride = false) => {
 const applySettings = (persist = true) => {
   const r = view.renderer
   const { marginTop, marginBottom, marginLeft, marginRight } = settings
+  // 书内字体·字形槽扫描：主内容 doc 就绪后扫一次并缓存（书内 font-family 声明不随主题/字号变化）。
+  if (!fontSlotScan) scanFontSlots()
   // 结构性留白测量：需书内/主题 CSS 生效后的原始垂直边距（测量模式暂不注入段落间隙与结构缩放规则）。
   // 语法键 = 排版主题 + 字号（主题预设边距、书内 em 边距都随其联动），变化则重扫。
   const structKey = settings.layoutTheme + '|' + settings.fontScale
@@ -1971,9 +2045,10 @@ const layoutThemePage = settingsPage('排版主题', el => {
   el.onEnter = () => build() // 进入页面前按当前生效值重建，避免总是显示「原书设置」
   build()
 })
-// 字体五分类页：中英分离开关 + 五分类入口（各下钻到对应字体选择页）
+// 字体字形槽位页：四个槽位入口（衬线/无衬线/等宽/楷书，各下钻到对应字体选择页）。
+// 「跟随原书」= 该字形槽位不替换，书里该风格的文字保留原书字体。
 const fontFacePage = settingsPage('字体', el => {
-  // 五个分类各为一行，点击进入该分类的字体网格选择页
+  // 每个槽位一行，点击进入该槽位的字体网格选择页
   FONT_KEYS.forEach(([key, label]) => {
     el.append(settingsRow(label, {
       valId: 'fv-' + key,

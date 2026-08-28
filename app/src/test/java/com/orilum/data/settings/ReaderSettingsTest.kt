@@ -32,8 +32,6 @@ class ReaderSettingsTest {
             fontBody = "Songti",
             fontTitle = "Heiti",
             fontCode = "Monaco",
-            fontBold = "Heiti",
-            fontItalic = "Kaiti",
             useOriginalStyle = true,
             useUserScripts = true,
             pageAnim = false,
@@ -90,7 +88,7 @@ class ReaderSettingsTest {
         listOf(
             "theme", "fontSize", "lineSpacing",
             "marginTop", "marginBottom", "marginLeft", "marginRight",
-            "fontBody", "fontTitle", "fontCode", "fontBold", "fontItalic",
+            "fontBody", "fontTitle", "fontCode",
             "useOriginalStyle", "useUserScripts", "pageAnim", "autoContinue", "pageNum",
             "fontScale", "scheme", "bgOverride", "fgOverride", "layoutTheme",
         ).forEach { assertTrue("missing key $it", obj.has(it)) }
@@ -162,5 +160,25 @@ class ReaderSettingsTest {
             layoutTheme = "traditional",
         )
         assertEquals(custom, ReaderSettings.fromJson(custom.toJson()))
+    }
+
+    @Test
+    fun `legacy five-category fonts migrate to element-type slots`() {
+        // 旧五分类 fontBody/fontTitle/fontCode 同名保留；fontBold/fontItalic 无对应档直接丢弃；fontKai(临时槽) 丢弃
+        val migrated = ReaderSettings.fromJson(
+            """{"fontBody":"Songti","fontTitle":"Heiti","fontCode":"Monaco","fontBold":"B","fontItalic":"I"}"""
+        )
+        assertEquals("Songti", migrated.fontBody)
+        assertEquals("Heiti", migrated.fontTitle)
+        assertEquals("Monaco", migrated.fontCode)
+    }
+
+    @Test
+    fun `legacy temporary kaiti-slot is dropped`() {
+        // 已被移除的“楷书”临时槽：旧数据残留的 fontKai 不再读取（重置为默认空）
+        val migrated = ReaderSettings.fromJson("""{"fontKai":"Kaiti"}""")
+        assertEquals("", migrated.fontBody)
+        assertEquals("", migrated.fontTitle)
+        assertEquals("", migrated.fontCode)
     }
 }
