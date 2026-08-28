@@ -28,6 +28,27 @@ class BookImporter(
 ) {
 
     /**
+     * 导入预检：仅解析所选书的元数据（书名/作者），**不复制文件、不落库**。
+     * 用于导入前检测与书库中已存在的重复书。解析失败返回 null。
+     */
+    suspend fun scan(uri: Uri): ScannedBook? = withContext(Dispatchers.IO) {
+        runCatching {
+            val tmp = File(context.cacheDir, "scan_${System.currentTimeMillis()}.epub")
+            try {
+                context.contentResolver.openInputStream(uri).use { input ->
+                    input ?: throw IllegalStateException("无法打开所选文件")
+                    input.copyTo(tmp.outputStream())
+                }
+                val parsed = ZipEpubResourceReader(tmp.path).use { EpubParser().parse(it) }
+                if (parsed.isEmpty) throw EpubFormatException("书中没有可读正文章节")
+                ScannedBook(parsed.title, parsed.author)
+            } finally {
+                runCatching { tmp.delete() }
+            }
+        }.getOrNull()
+    }
+
+    /**
      * 导入所选电子书，返回新记录主键；失败时返回异常。
      *
      * @param uri SAF 选书返回的 content:// uri（仅本次会话内有效，用于一次性读取复制）。
@@ -104,3 +125,9 @@ class BookImporter(
         }.getOrNull()
     }
 }
+
+/** 预检扫描得到的书元数据（导入前用于重复判定）。 */
+data class ScannedBook(
+    val title: String,
+    val author: String?,
+)

@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -75,6 +76,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -156,6 +159,9 @@ class MainActivity : ComponentActivity() {
     /** 记录最后打开的书主键，供「打开时续读」冷启动跳转。 */
     private val prefs by lazy { getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE) }
 
+    /** 导入时检测到重复书的弹窗提示数据；非空时显示覆盖确认对话框。 */
+    private var dupPrompt by mutableStateOf<DupPrompt?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 「打开时续读」：启动书架时若开关开启且记录过最后阅读的书，则自动进入阅读器。
@@ -175,11 +181,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             OrilumTheme {
-                // 视图三态：窗格(封面网格) → 带图列表 → 纯文本列表，循环切换。初始值从持久化读取。
+                // 视图两态：窗格(封面网格) ↔ 带图列表，循环切换。初始值从持久化读取。
                 var view by rememberSaveable {
                     mutableStateOf(
-                        runCatching { ShelfView.valueOf(loadPref(prefs, KEY_SHELF_VIEW, ShelfView.TextList.name)) }
-                            .getOrDefault(ShelfView.TextList),
+                        runCatching { ShelfView.valueOf(loadPref(prefs, KEY_SHELF_VIEW, ShelfView.CoverList.name)) }
+                            .getOrDefault(ShelfView.CoverList),
                     )
                 }
                 // 排序：加入时间 / 阅读时间 / 书名。初始值从持久化读取。
@@ -213,8 +219,7 @@ class MainActivity : ComponentActivity() {
                     onToggleView = {
                         view = when (view) {
                             ShelfView.Grid -> ShelfView.CoverList
-                            ShelfView.CoverList -> ShelfView.TextList
-                            ShelfView.TextList -> ShelfView.Grid
+                            ShelfView.CoverList -> ShelfView.Grid
                         }
                         prefs.edit().putString(KEY_SHELF_VIEW, view.name).apply()
                     },
@@ -250,6 +255,16 @@ class MainActivity : ComponentActivity() {
                     settingsOpen = showSettings,
                     onDismissSettings = { showSettings = false },
                 )
+                // 导入重复书提示：一次汇总所有重复书名，询问是否覆盖。
+                dupPrompt?.let { p ->
+                    AlertDialog(
+                        onDismissRequest = { onOverwriteSkip() },
+                        title = { Text("重复图书") },
+                        text = { Text("${p.titles.joinToString("、")}已存在，覆盖吗？") },
+                        confirmButton = { TextButton(onClick = { onOverwriteConfirm() }) { Text("覆盖") } },
+                        dismissButton = { TextButton(onClick = { onOverwriteSkip() }) { Text("跳过") } },
+                    )
+                }
             }
         }
     }
@@ -258,25 +273,80 @@ class MainActivity : ComponentActivity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     /**
-     * 批量导入所选电子书：逐个在 I/O 协程导入，结束后用一条 Toast 汇总成功/失败情况。
-     * （多选导入支持，避免一次只能一本。）
+     * 批量导入所选电子书：先预检扫描全部所选书的元数据，与书库比对出重复书。
+     * 无重复 → 直接全部导入；有重复 → 弹一次对话框列出所有重复书名，由用户决定覆盖或跳过。
+     * 最终用一条 Toast 汇总成功/失败情况。（多选导入支持，避免一次只能一本。）
      */
     private fun onBooksPicked(uris: List<android.net.Uri>) {
         lifecycleScope.launch {
-            var ok = 0
-            var fail = 0
-            // 逐个导入期间临时离线提醒：导入是串行 I/O，避免 UI 卡顿。
-            uris.forEach { uri ->
-                val result = importer.import(uri)
-                if (result.isSuccess) ok++ else fail++
+            // 预检：逐个扫描元数据（不复制文件、不落库）
+            val scanned = uris.map { importer.scan(it) }
+            val existing = repository.allBooks()
+            // 判定重复：与书库现有书同书名同作者
+            val dupIndexes = scanned.indices.filter { i ->
+                val s = scanned[i] ?: return@filter false
+                existing.any { it.sameBookAs(s.title, s.author) }
             }
-            val msg = when {
-                ok == 0 -> "导入失败：$fail 本未导入"
-                fail == 0 -> "已加入书架 $ok 本"
-                else -> "导入成功 $ok 本，失败 $fail 本"
+            if (dupIndexes.isEmpty()) {
+                doImport(uris, skip = emptySet())
+            } else {
+                // 一次性汇总所有重复书名，弹窗询问覆盖
+                dupPrompt = DupPrompt(
+                    titles = dupIndexes.map { scanned[it]?.title ?: "未知书名" },
+                    uris = uris,
+                    dupIndexes = dupIndexes.toSet(),
+                )
             }
-            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** 对话框确认「覆盖」：先删除旧书（记录+文件+封面），再全部重新导入。 */
+    private fun onOverwriteConfirm() {
+        val prompt = dupPrompt ?: return
+        dupPrompt = null
+        lifecycleScope.launch {
+            val existing = repository.allBooks()
+            prompt.uris.forEachIndexed { i, uri ->
+                if (i in prompt.dupIndexes) {
+                    val s = importer.scan(uri) ?: return@forEachIndexed
+                    existing.firstOrNull { it.sameBookAs(s.title, s.author) }?.let { old ->
+                        deleteBookFiles(old)
+                        repository.removeBook(old)
+                    }
+                }
+            }
+            doImport(prompt.uris, skip = emptySet())
+        }
+    }
+
+    /** 对话框选择「跳过」：跳过所有重复书，仅导入其余新书。 */
+    private fun onOverwriteSkip() {
+        val prompt = dupPrompt ?: return
+        dupPrompt = null
+        lifecycleScope.launch { doImport(prompt.uris, skip = prompt.dupIndexes) }
+    }
+
+    /** 逐个在 I/O 协程导入 [uris]（[skip] 下标跳过），结束后用一条 Toast 汇总。 */
+    private suspend fun doImport(uris: List<android.net.Uri>, skip: Set<Int>) {
+        var ok = 0
+        var fail = 0
+        uris.forEachIndexed { i, uri ->
+            if (i in skip) return@forEachIndexed
+            val result = importer.import(uri)
+            if (result.isSuccess) ok++ else fail++
+        }
+        val msg = when {
+            ok == 0 -> "导入失败：$fail 本未导入"
+            fail == 0 -> "已加入书架 $ok 本"
+            else -> "导入成功 $ok 本，失败 $fail 本"
+        }
+        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    /** 删除旧书的本地文件与封面（覆盖导入前清理）。 */
+    private fun deleteBookFiles(book: Book) {
+        runCatching { File(book.filePath).delete() }
+        book.coverPath?.let { runCatching { File(it).delete() } }
     }
 
     private fun openReader(book: Book) {
@@ -325,6 +395,13 @@ class MainActivity : ComponentActivity() {
 private val BarGray = Color.White
 private val BarGrayFg = Color(0xFF1F1F1F)
 
+/** 导入时检测到重复书的弹窗数据：重复书名 + 本次全部所选书 + 重复下标。 */
+private data class DupPrompt(
+    val titles: List<String>,
+    val uris: List<android.net.Uri>,
+    val dupIndexes: Set<Int>,
+)
+
 /**
  * 底部工具栏按钮：图标在上、文字在下，平分一行；「图标+文字」整体作为圆角按钮，按压时整块高亮。
  * 与阅读页 reader.html 的 .tool（icon 上、label 下、:active 高亮）视觉与交互一致。
@@ -365,8 +442,8 @@ private fun RowScope.ToolItem(icon: ImageVector, label: String, onClick: () -> U
     }
 }
 
-/** 书架视图三态：封面窗格 → 带图列表 → 纯文本列表，由底部「封面/列表」按钮循环切换。 */
-private enum class ShelfView { Grid, CoverList, TextList }
+/** 书架视图两态：封面窗格 ↔ 带图列表，由底部「封面/列表」按钮循环切换。 */
+private enum class ShelfView { Grid, CoverList }
 
 /** 尺寸受限的封面缩略图（导入时已缩到 ~720px）。无封面/加载失败时用书名灰底占位。 */
 @androidx.compose.runtime.Composable
@@ -489,43 +566,6 @@ private fun CoverListRow(
     }
 }
 @androidx.compose.runtime.Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun BookCard(book: Book, editMode: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (selected) Modifier.background(Color(0x142563F7)) else Modifier)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
-    ) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = book.title, style = MaterialTheme.typography.titleMedium)
-                book.author?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            // 编辑态右侧选中指示，与 CoverListRow 同风格。
-            if (editMode) {
-                Text(
-                    text = if (selected) "✓" else "○",
-                    fontSize = 22.sp,
-                    color = if (selected) Color(0xFF2563F7) else Color(0xFFBBBBBB),
-                )
-            }
-        }
-    }
-}
-
-/**
- * 书架整屏：顶部标题栏（承接状态栏）+ 内容区 + 底部工具栏（承接导航栏）。
- * Material3 Scaffold 自动把系统栏 insets 计入 topBar/bottomBar 背景，状态栏/导航栏
- * 区域与栏同色，应用切换/最近任务预览不露深色横条。
- */
-@androidx.compose.runtime.Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun ShelfScreen(
     books: List<Book>,
@@ -643,6 +683,12 @@ private fun ShelfScreen(
                                 label = "全选",
                                 onClick = { if (selected.size == books.size) {} else onSelectAll() },
                             )
+                            // 反选：对每一本翻转选中状态（onToggleSelect 基于最新 selected 逐个切换）。
+                            ToolItem(
+                                icon = Icons.Default.Refresh,
+                                label = "反选",
+                                onClick = { books.forEach { onToggleSelect(it.id) } },
+                            )
                             ToolItem(icon = Icons.Default.Menu, label = "分组", onClick = onGroup)
                             ToolItem(icon = Icons.Default.Delete, label = "删除", onClick = onDelete)
                         } else {
@@ -651,7 +697,7 @@ private fun ShelfScreen(
                             ToolItem(icon = when (view) {
                                 ShelfView.Grid -> Icons.Default.List
                                 else -> ImageVector.vectorResource(R.drawable.ic_grid)
-                            }, label = "封面/列表", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
+                            }, label = if (view == ShelfView.Grid) "列表" else "网格", onClick = { if (settingsOpen) onDismissSettings() else onToggleView() })
                             ToolItem(icon = Icons.Default.Add, label = "导入", onClick = { if (settingsOpen) onDismissSettings() else onImport() })
                             ToolItem(icon = Icons.Default.Edit, label = "编辑", onClick = { if (settingsOpen) onDismissSettings() else onEdit() })
                             ToolItem(icon = Icons.Default.Settings, label = "设置", onClick = onSettings)
@@ -710,26 +756,6 @@ private fun ShelfScreen(
                                 book = book,
                                 editMode = editMode,
                                 selected = sel,
-                                onClick = {
-                                    if (settingsOpen) onDismissSettings()
-                                    else if (editMode) onToggleSelect(book.id) else onOpenBook(book)
-                                },
-                                onLongClick = { onLongPressBook(book.id) },
-                            )
-                        }
-                    }
-                    // 纯文本列表（沿用原 BookCard）
-                    ShelfView.TextList -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(books, key = { it.id }) { book ->
-                            // 面板打开时书不可点（与底部功能按钮同呈模态），点书仅关闭面板。
-                            BookCard(
-                                book = book,
-                                editMode = editMode,
-                                selected = book.id in selected,
                                 onClick = {
                                     if (settingsOpen) onDismissSettings()
                                     else if (editMode) onToggleSelect(book.id) else onOpenBook(book)

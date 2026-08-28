@@ -31,6 +31,9 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun book(id: Long): Book?
 
+    @Query("SELECT * FROM books")
+    suspend fun allBooks(): List<Book>
+
     @Query("UPDATE books SET readTime = :time WHERE id = :id")
     suspend fun updateReadTime(id: Long, time: Long)
 

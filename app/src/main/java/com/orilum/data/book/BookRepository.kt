@@ -21,6 +21,9 @@ class BookRepository(private val dao: BookDao) {
 
     suspend fun getBook(id: Long): Book? = dao.book(id)
 
+    /** 一次性返回书库全量（用于导入重复判定等非流式场景）。 */
+    suspend fun allBooks(): List<Book> = dao.allBooks()
+
     /** 加入书架；返回新记录主键。 */
     suspend fun addBook(title: String, author: String?, filePath: String, coverPath: String? = null): Long =
         dao.insert(Book(title = title, author = author, filePath = filePath, coverPath = coverPath))
