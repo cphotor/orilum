@@ -325,6 +325,7 @@ class ReaderActivity : ComponentActivity() {
                 },
                 { applyBrightness(it) },
                 { applyOffsetBrightness(it) },
+                webView,
             ),
             "EPUBBridge",
         )
@@ -403,6 +404,7 @@ class ReaderActivity : ComponentActivity() {
 
     /** 还原进入前的系统亮度与亮度模式（完全跟随系统/退出阅读器时调用）。 */
     private fun restoreSystemBrightness() {
+        if (!Settings.System.canWrite(this)) return
         if (origBrightness >= 0) {
             Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, origBrightness)
         }
@@ -468,9 +470,11 @@ class ReaderActivity : ComponentActivity() {
 
     /** 仅作为「未授予 WRITE_SETTINGS」时的窗口级亮度回退方案。 */
     private fun setWindowBrightness(level: Float) {
-        val attrs = window.attributes
-        attrs.screenBrightness = level
-        window.attributes = attrs
+        webView.post {
+            val attrs = window.attributes
+            attrs.screenBrightness = level
+            window.attributes = attrs
+        }
     }
 
     /** SAF 目录选择器关闭（确认/取消）后回到阅读器时恢复沉浸式。 */
@@ -505,6 +509,7 @@ class EPUBBridge(
     private val setSystemBarsVisibility: (Boolean) -> Unit,
     private val applyBrightness: (Int) -> Unit,
     private val applySystemBrightnessOffset: (Int) -> Unit,
+    private val webView: WebView,
 ) {
 
     /** foliate 每次 relocate 回调：携带 `JSON.stringify(view.lastLocation)`。 */
@@ -617,7 +622,9 @@ class EPUBBridge(
 
     /** 顶部「返回书架」：正常退出阅读器（不触发任何翻页）。 */
     @JavascriptInterface
-    fun back() = exit()
+    fun back() {
+        webView.post { exit() }
+    }
 
     /** 应用阅读器亮度档位（-50..100）：0..100 可根据系统授权写系统亮度、<0 窗口最暗由前端遮罩叠加。跟随系统走 [setSystemBrightnessOffset]。 */
     @JavascriptInterface
