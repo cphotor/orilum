@@ -532,9 +532,6 @@ export class Paginator extends HTMLElement {
     #filling = false              // true while #fillVisibleArea is running
     #fillPromise = null           // tracks in-progress #fillVisibleArea for awaiting
     columnCount = 1               // 本项目单栏整屏（每屏一页）
-    /* ---- 预排 ----
-     * 预排只保证 primary±1 在池中。 */
-    #idlePreload = false          // 预排循环守卫（同一时刻只跑一个预排循环）
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -652,14 +649,52 @@ export class Paginator extends HTMLElement {
         this.#observer.observe(this.#container)
         this.#container.addEventListener('scroll', () => {
             if (!this.#isAnimating) this.dispatchEvent(new Event('scroll'))
+            // Readest 方案：scroll 事件实时触发前向预排（不在 debounce 里），
+            // 保证翻页后邻章尽快加载，不出现"翻完等空白"。
+            if (!this.#filling && !this.#stabilizing) {
+                const minPages = 5
+                const { size } = this
+                if (size > 0) {
+                    // 前向预排
+                    const pagesAhead = Math.floor((this.#renderedViewSize - this.#renderedEnd) / size)
+                    if (pagesAhead < minPages) {
+                        const sorted = this.#sortedViews
+                        const lastIndex = sorted[sorted.length - 1]?.[0]
+                        if (lastIndex != null) {
+                            const nextIdx = this.#adjacentIndex(1, lastIndex)
+                            if (nextIdx != null) {
+                                this.#filling = true
+                                this.#loadSection(nextIdx).finally(() => {
+                                    this.#filling = false
+                                })
+                            }
+                        }
+                    }
+                    // 后向预排：保证前面也有足够的页数，向后翻页流畅
+                    if (!this.#filling) {
+                        const pagesBehind = Math.floor(this.#renderedStart / size)
+                        if (pagesBehind < minPages) {
+                            const sorted = this.#sortedViews
+                            const firstIndex = sorted[0]?.[0]
+                            if (firstIndex != null) {
+                                const prevIdx = this.#adjacentIndex(-1, firstIndex)
+                                if (prevIdx != null) {
+                                    this.#filling = true
+                                    this.#loadSection(prevIdx).finally(() => {
+                                        this.#filling = false
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             try { window.EPUBBridge?.log?.('[scr] scrollEvent primary=' + this.#primaryIndex + ' vo=' + Math.round(this.#getViewOffset(this.#primaryIndex)) + ' scroll=' + Math.round(this.#container[this.scrollProp]) + ' animating=' + this.#isAnimating) } catch (_) {}
         })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.#justAnchored) this.#justAnchored = false
             else this.#afterScroll('scroll')
-            // 翻页静止后：销毁缓冲窗口外的远章节，并补齐新窗口内未排章。
             this.#trimDistantViews()
-            this.#scheduleAllPreload()
         }, 250))
 
         const opts = { passive: false }
@@ -1020,29 +1055,6 @@ export class Paginator extends HTMLElement {
         } finally {
             this.#trimming = false
         }
-    }
-    /** 取下一个待预排章节：只可能是 primary 的相邻两章（primary±1）。 */
-    #popNearestPrep() {
-        const cur = this.#primaryIndex
-        const needed = [cur - 1, cur + 1].filter(i =>
-            i >= 0 && i < this.sections.length
-            && this.sections[i]?.linear !== 'no' && !this.#views.has(i))
-        return needed[0] ?? -1
-    }
-    /** 预排：逐个加载未排的相邻章，排齐即停。 */
-    async #tickIdlePreload() {
-        if (this.#idlePreload) return
-        this.#idlePreload = true
-        try {
-            // 最多预排 1 次（只排一个邻章），避免长时间占用主线程
-            const idx = this.#popNearestPrep()
-            if (idx >= 0) await this.#loadSection(idx)
-        } finally {
-            this.#idlePreload = false
-        }
-    }
-    #scheduleAllPreload() {
-        this.#tickIdlePreload()
     }
     /** 渲染所有已排版视图为同一新 layout（resize / 设置变更时）。offsets 从 DOM 实时算，重排后重锚定。 */
     render() {
@@ -1497,10 +1509,6 @@ export class Paginator extends HTMLElement {
             }
         }
         this.#primaryIndex = index
-        // 目标章必须在 contentPages 定稿后才落位：否则用临时(未定)宽度 + 翻页动画去 scrollToAnchor，
-        // 定稿过程(如 cp 1→3→4)每次 expand 都触发 onExpand→#scrollToAnchor 重锚 → 前后翻页均闪现。
-        // 此刻 #stabilizing=true，onExpand 重锚被抑制；等定稿后再一次性精确落位。
-        await this.#settleViewWidth(view)
         // 只销毁距目标 >1 的远章，保留 ±1 邻章（历史窗口）
         const drop = [...this.#views.keys()]
             .filter(i => i !== index && Math.abs(i - index) > 1)
@@ -1546,7 +1554,7 @@ export class Paginator extends HTMLElement {
         this.#fillPromise.then(() => {})
         if (hasFocus) this.focusView()
     }
-    // 填充邻章：确保至少 5 页 ahead，最多加载 8 个章节
+    // 填充邻章：确保前后至少 5 页，最多加载 8 个章节
     async #fillVisibleArea() {
         if (this.#filling) return
         this.#filling = true
@@ -1570,6 +1578,18 @@ export class Paginator extends HTMLElement {
                 if (nextIdx == null) break
                 await this.#loadSection(nextIdx)
                 if (!this.#views.has(nextIdx)) break
+            }
+
+            // 后向预排：保证前一章已加载，向后翻页流畅
+            if (this.#views.size < maxSections) {
+                const sorted = this.#sortedViews
+                const firstIndex = sorted[0]?.[0]
+                if (firstIndex != null) {
+                    const prevIdx = this.#adjacentIndex(-1, firstIndex)
+                    if (prevIdx != null && !this.#views.has(prevIdx)) {
+                        await this.#loadSection(prevIdx)
+                    }
+                }
             }
         } finally {
             this.#filling = false
